@@ -1,0 +1,4 @@
+package: github.com/sdobz/backup
+import:
+- package: github.com/gobwas/glob
+- package: github.com/kalafut/imohash

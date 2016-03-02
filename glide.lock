@@ -1,0 +1,11 @@
+hash: 0116c770292904252690297ed63803ef08bd9b3dc4744f9187edc816312d1a7a
+updated: 2016-03-01T16:16:07.891339731-08:00
+imports:
+- name: github.com/gobwas/glob
+  version: a3f5513f64fe4307f2c71ea06b25f6154eb9dc5f
+- name: github.com/kalafut/imohash
+  version: 1933ea10a07caf46d9602fa82e31fcd5a1a278ab
+- name: github.com/spaolacci/murmur3
+  version: 0d12bf811670bf6a1a63828dfbd003eded177fce
+  repo: https://github.com/spaolacci/murmur3
+devImports: []
