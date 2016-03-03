@@ -1,5 +1,10 @@
 package main
 
 func main() {
-	enumerate(BackupClientConfig{})
+	clientComm, serverComm := NewChannelNetwork()
+
+	go func() {
+		PerformBackup(BackupClientConfig{}, clientComm)
+	}()
+	ServeBackup(BackupServerConfig{}, serverComm)
 }

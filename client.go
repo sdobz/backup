@@ -34,8 +34,8 @@ type BackupFile struct {
 }
 
 type BackupStats struct {
-	start time.Time
-	end time.Time
+	start        time.Time
+	end          time.Time
 	filesChecked uint64
 	globsChecked uint64
 }
@@ -162,8 +162,8 @@ func expandTilde(path string) string {
 	return path
 }
 
-
-func enumerate(config BackupClientConfig) {
+// Tell server to start backup session, specifying a directory
+func PerformBackup(config BackupClientConfig, network NetworkInterface) {
 	specFile := ""
 	if config.specFile == "" {
 		specFile = "~/.backup"
@@ -184,12 +184,30 @@ func enumerate(config BackupClientConfig) {
 	}
 
 	backupStats := BackupStats{}
+	fileStates := make(map[FileId]*ClientFileState)
+
+	go func() {
+		for {
+			msg := network.getMessage()
+			log.Printf("Client got: %v", msg)
+			if cfs, ok := fileStates[msg.id]; ok {
+				cfs.handleMessage(msg)
+				log.Print(cfs)
+			}
+		}
+	}()
+
 	for backupFile := range backupSpec.enumerate(&backupStats) {
 		if backupFile.err != nil {
-			log.Print(backupFile.err)
-		} else {
-			log.Print("--Got: ", backupFile.path)
+			log.Fatal(backupFile.err)
 		}
+
+		cfs, err := NewClientFileState(backupFile.path, network)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fileStates[cfs.id] = cfs
 	}
 	log.Print("Took: ", backupStats.duration().Seconds(), "s")
 }

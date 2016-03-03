@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/gob"
 	"encoding/hex"
@@ -9,15 +10,21 @@ import (
 	"log"
 	"os"
 	"time"
-	"bytes"
+	"fmt"
+	"io"
 )
 
 // File state
 type FileId string // TODO: Fixed size bytes
+
+func (id FileId) String() string {
+	return string(id[:4])
+}
+
 type FileDedupeHash [imohash.Size]byte
 type FileVerificationHash string
 
-func getFileId(str string) FileId {
+func NewFileId(str string) FileId {
 	hasher := md5.New()
 	hasher.Write([]byte(str))
 	return FileId(hex.EncodeToString(hasher.Sum(nil)))
@@ -28,14 +35,34 @@ type MessageType int
 
 const (
 	// All messages include id
-	MessageTimeModified  MessageType = iota // Client -> Server {filename, modified}
-	MessageFileOK                           // Client <- Server
-	MessageFileVerification                 // Client <- Server {file date, md5}
-	MessageFileMissing                      // Client <- Server
-	MessageDedupeHash                       // Client -> Server {dedupehash}
-	MessageRequestBinary                    // Client <- Server
-	MessageFileChunk                        // Client -> Server {filesize, offset, chunk}
+	MessageStartFile        MessageType = iota // Client -> Server {filename, modified}
+	MessageFileOK                              // Client <- Server
+	MessageFileVerification                    // Client <- Server {file date, md5}
+	MessageFileMissing                         // Client <- Server
+	MessageDedupeHash                          // Client -> Server {dedupehash}
+	MessageRequestBinary                       // Client <- Server
+	MessageFileChunk                           // Client -> Server {filesize, offset, chunk}
 )
+
+func (mt MessageType) String() string {
+	switch mt {
+    case MessageStartFile:
+        return "Start File"
+    case MessageFileOK:
+		return "File OK"
+	case MessageFileVerification:
+		return "File Verification"
+	case MessageFileMissing:
+		return "File Missing"
+	case MessageDedupeHash:
+		return "Deduplication Hash"
+	case MessageRequestBinary:
+		return "Request Binary"
+	case MessageFileChunk:
+		return "File Chunk"
+    }
+    return "Unknown"
+}
 
 type Message struct {
 	id FileId
@@ -43,17 +70,23 @@ type Message struct {
 	d  []byte
 }
 
+func (msg Message) String() string {
+	return fmt.Sprintf("M[%s] %v", msg.id[:4], msg.t)
+}
+
 func NewMessage(id FileId, t MessageType) *Message {
 	return &Message{
 		id: id,
-		t: t,
+		t:  t,
 	}
 }
 
-func (msg *Message) encode(data interface{}) Message {
-	enc := gob.NewEncoder(bytes.NewBuffer(msg.d))
+func (msg *Message) encode(data interface{}) *Message {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
 	enc.Encode(data)
-	return *msg
+	msg.d = buf.Bytes()
+	return msg
 }
 
 func (msg *Message) decode(data interface{}) {
@@ -61,23 +94,23 @@ func (msg *Message) decode(data interface{}) {
 	enc.Decode(data)
 }
 
-type DataTimeModified struct {
-	filename string
-	modified time.Time
+type DataStartFile struct {
+	Filename string
+	Modified time.Time
 }
 
 type DataFileVerification struct {
-	hash FileVerificationHash
+	Hash FileVerificationHash
 }
 
 type DataDedupeHash struct {
-	hash FileDedupeHash
+	Hash FileDedupeHash
 }
 
 type DataFileChunk struct {
-	filesize int64
-	offset   int64
-	chunk    []byte
+	Filesize int64
+	Offset   int64
+	Chunk    []byte
 }
 
 const ChunkSize = 1
@@ -92,9 +125,27 @@ const (
 	ClientStateSendingBinary                     // Server requested binary
 )
 
+func (state ClientState) String() string {
+	switch state {
+	case ClientStateInit:
+		return "Init"
+	case ClientStateCheckingStatus:
+		return "Checking File Status"
+	case ClientStateFileOK:
+		return "File OK"
+	case ClientStateSendingBinary:
+		return "Sending Binary"
+	}
+	return "Unknown"
+}
+
 type BinaryState struct {
 	filesize int64
 	offset   int64
+}
+
+func (bs BinaryState) String() string {
+	return fmt.Sprintf("%v/%v", bs.offset, bs.filesize)
 }
 
 type ClientFileState struct {
@@ -102,27 +153,35 @@ type ClientFileState struct {
 	filename    string
 	id          FileId
 	binaryState BinaryState
-	out         chan<- Message
+	network     NetworkInterface // TODO: Factor into handleMessage
 }
 
-func NewClientFileState(filename string, out chan<- Message) (cfs ClientFileState, err error) {
+func (cfs *ClientFileState) String() string {
+	if cfs.state != ClientStateSendingBinary {
+		return fmt.Sprintf("C[%v] %v", cfs.id, cfs.state)
+	} else {
+		return fmt.Sprintf("C[%v] %v %v", cfs.id, cfs.state, cfs.binaryState)
+	}
+}
+
+func NewClientFileState(filename string, network NetworkInterface) (cfs *ClientFileState, err error) {
 	// Assert file exists
 
-	cfs = ClientFileState{
+	cfs = &ClientFileState{
 		state:       ClientStateInit,
 		filename:    filename,
-		id:          getFileId(filename),
+		id:          NewFileId(filename),
 		binaryState: BinaryState{},
-		out:         out,
+		network:     network,
 	}
 
-	cfs.sendTimeModified()
+	cfs.sendStartFile()
 	cfs.state = ClientStateCheckingStatus
 
 	return cfs, nil
 }
 
-func (cfs *ClientFileState) handleMessage(msg Message, out chan<- Message) error {
+func (cfs *ClientFileState) handleMessage(msg Message) error {
 	if cfs.state == ClientStateCheckingStatus {
 		if msg.t == MessageFileOK {
 			cfs.state = ClientStateFileOK
@@ -154,7 +213,7 @@ func (cfs *ClientFileState) handleMessage(msg Message, out chan<- Message) error
 	return errors.New("Unhandled message")
 }
 
-func (cfs *ClientFileState) sendTimeModified() {
+func (cfs *ClientFileState) sendStartFile() {
 	info, err := os.Stat(cfs.filename)
 	if err != nil {
 		// TODO: Handle error
@@ -163,12 +222,12 @@ func (cfs *ClientFileState) sendTimeModified() {
 
 	cfs.binaryState.filesize = info.Size()
 
-	msg := NewMessage(cfs.id, MessageTimeModified)
-	msg.encode(DataTimeModified{
-		filename: cfs.filename,
-		modified: info.ModTime(),
+	msg := NewMessage(cfs.id, MessageStartFile)
+	msg.encode(DataStartFile{
+		Filename: cfs.filename,
+		Modified: info.ModTime(),
 	})
-	cfs.out <- *msg
+	cfs.network.send(*msg)
 }
 
 func (cfs *ClientFileState) sendDedupeHash() {
@@ -181,84 +240,113 @@ func (cfs *ClientFileState) sendDedupeHash() {
 
 	msg := NewMessage(cfs.id, MessageDedupeHash)
 	msg.encode(DataDedupeHash{
-		hash: hash,
+		Hash: hash,
 	})
-	cfs.out <- *msg
+	cfs.network.send(*msg)
 }
 
 func (cfs *ClientFileState) sendFileChunk() {
+	_ = "breakpoint"
 	file, err := os.Open(cfs.filename) // For read access.
 	if err != nil {
 		log.Fatal(err)
 	}
 	data := make([]byte, ChunkSize)
 	count, err := file.Read(data)
-	if err != nil {
+	data = data[:count]
+	if err != io.EOF && err != nil {
 		log.Fatal(err)
 	}
-
 	msg := NewMessage(cfs.id, MessageFileChunk)
 	msg.encode(DataFileChunk{
-		filesize: cfs.binaryState.filesize,
-		offset:   cfs.binaryState.offset,
-		chunk:    data,
+		Filesize: cfs.binaryState.filesize,
+		Offset:   cfs.binaryState.offset,
+		Chunk:    data,
 	})
-	cfs.out <- *msg
+	cfs.network.send(*msg)
 
 	cfs.binaryState.offset += int64(count)
 }
 
-// Client state
+// Server state
 type ServerState int
 
 type ServerStore interface {
-	hasFile(FileId) bool
-	getVerification(FileId) DataFileVerification
-	isExpired(FileId) bool
-	hasDedupeHash(FileDedupeHash) bool
-	hasVerificationHash(FileVerificationHash) bool
-	storeBinary([]byte)
+	HasFile(string) bool
+	IsExpired(string) bool
+	GetVerification(FileId) DataFileVerification
+	HasDedupeHash(FileDedupeHash) bool
+	HasVerificationHash(FileVerificationHash) bool
+	StoreBinary([]byte)
 }
 
 const (
-	ServerStateInit               ServerState = iota // Sent file, waiting for end or hash
-	ServerStateCheckingDedupeHash                    // Awaiting file hash from client
-	ServerStateCheckingVerificationHash                     // Awaiting file hash from client
-	ServerStateGettingBinary                         // Awaiting binary from client
-	ServerStateEndLink                               // Link file to existing file
-	ServerStateEndBinary                             // Write new binary data
+	ServerStateInit                     ServerState = iota // Sent file, waiting for end or hash
+	ServerStateCheckingDedupeHash                          // Awaiting file hash from client
+	ServerStateCheckingVerificationHash                    // Awaiting file hash from client
+	ServerStateGettingBinary                               // Awaiting binary from client
+	ServerStateEndLink                                     // Link file to existing file
+	ServerStateEndBinary                                   // Write new binary data
 )
+
+func (state ServerState) String() string {
+	switch state {
+	case ServerStateInit:
+		return "Init"
+	case ServerStateCheckingDedupeHash:
+		return "Checking Dedupe Hash"
+	case ServerStateCheckingVerificationHash:
+		return "Checking Verif Hash"
+	case ServerStateGettingBinary:
+		return "Getting Binary"
+	case ServerStateEndLink:
+		return "Finished Link"
+	case ServerStateEndBinary:
+		return "Finished Binary"
+	}
+	return "Unknown"
+}
 
 type ServerFileState struct {
 	state       ServerState
 	filename    string
 	id          FileId
 	binaryState BinaryState
-	out         chan<- Message // TODO: Factor channel and store out
+	network     NetworkInterface // TODO: Factor channel and store out
 	store       ServerStore
 }
 
-func NewServerFileState(filename string, store ServerStore, out chan<- Message) (sfs *ServerFileState, err error) {
+func (sfs *ServerFileState) String() string {
+	if sfs.state != ServerStateGettingBinary {
+		return fmt.Sprintf("S[%v] %v", sfs.id, sfs.state)
+	} else {
+		return fmt.Sprintf("S[%v] %v %v", sfs.id, sfs.state, sfs.binaryState)
+	}
+}
+
+func NewServerFileState(fileData DataStartFile, store ServerStore, network NetworkInterface) (sfs *ServerFileState, err error) {
 
 	sfs = &ServerFileState{
 		state:       ServerStateInit,
-		filename:    filename,
-		id:          getFileId(filename),
+		filename:    fileData.Filename,
+		id:          NewFileId(fileData.Filename),
 		binaryState: BinaryState{},
 		store:       store,
-		out:         out,
+		network:     network,
 	}
 
 	return sfs, nil
 }
 
-func (sfs *ServerFileState) handleMessage(msg Message, out chan<- Message) error {
+func (sfs *ServerFileState) handleMessage(msg Message) error {
 	if sfs.state == ServerStateInit {
-		if msg.t == MessageTimeModified {
-			if !sfs.store.hasFile(msg.id) {
+		if msg.t == MessageStartFile {
+			fileData := DataStartFile{}
+			msg.decode(fileData)
+			if !sfs.store.HasFile(fileData.Filename) {
 				sfs.sendFileMissing()
 				sfs.state = ServerStateCheckingDedupeHash
-			} else if sfs.store.isExpired(msg.id) {
+			} else if sfs.store.IsExpired(fileData.Filename) {
 				sfs.sendFileVerification()
 				sfs.state = ServerStateCheckingVerificationHash
 			} else {
@@ -271,7 +359,7 @@ func (sfs *ServerFileState) handleMessage(msg Message, out chan<- Message) error
 		if msg.t == MessageDedupeHash {
 			dedupeData := DataDedupeHash{}
 			msg.decode(dedupeData)
-			if sfs.store.hasDedupeHash(dedupeData.hash) {
+			if sfs.store.HasDedupeHash(dedupeData.Hash) {
 				sfs.sendFileOK()
 				sfs.state = ServerStateEndLink
 			} else {
@@ -281,23 +369,30 @@ func (sfs *ServerFileState) handleMessage(msg Message, out chan<- Message) error
 			return nil
 		}
 	} else if sfs.state == ServerStateCheckingVerificationHash {
-		verificationData := DataFileVerification{}
-		msg.decode(verificationData)
-		if sfs.store.hasVerificationHash(verificationData.hash) {
-			sfs.sendFileOK()
-			sfs.state = ServerStateEndLink
-		} else {
-			sfs.sendRequestBinary()
-			sfs.state = ServerStateGettingBinary
+		if msg.t == MessageFileVerification {
+			verificationData := DataFileVerification{}
+			msg.decode(verificationData)
+			if sfs.store.HasVerificationHash(verificationData.Hash) {
+				sfs.sendFileOK()
+				sfs.state = ServerStateEndLink
+			} else {
+				sfs.sendRequestBinary()
+				sfs.state = ServerStateGettingBinary
+			}
+			return nil
 		}
 	} else if sfs.state == ServerStateGettingBinary {
-		dataChunk := DataFileChunk{}
-		msg.decode(&dataChunk)
-		sfs.store.storeBinary(dataChunk.chunk)
-		if dataChunk.filesize == dataChunk.offset + int64(len(dataChunk.chunk)) {
-			sfs.sendFileOK()
-		} else {
-			sfs.sendRequestBinary()
+		if msg.t == MessageFileChunk {
+			dataChunk := DataFileChunk{}
+			msg.decode(&dataChunk)
+			sfs.store.StoreBinary(dataChunk.Chunk)
+			if dataChunk.Filesize == dataChunk.Offset + int64(len(dataChunk.Chunk)) {
+				sfs.sendFileOK()
+				sfs.state = ServerStateEndBinary
+			} else {
+				sfs.sendRequestBinary()
+			}
+			return nil
 		}
 	}
 	return errors.New("Unhandled message")
@@ -311,19 +406,19 @@ func (sfs *ServerFileState) newMessage(t MessageType) Message {
 }
 
 func (sfs *ServerFileState) sendFileOK() {
-	sfs.out <- *NewMessage(sfs.id, MessageFileOK)
+	sfs.network.send(*NewMessage(sfs.id, MessageFileOK))
 }
 
 func (sfs *ServerFileState) sendFileVerification() {
 	// TODO: Factor getExpired out
 	msg := *NewMessage(sfs.id, MessageFileVerification)
-	sfs.out <- msg
+	sfs.network.send(msg)
 }
 
 func (sfs *ServerFileState) sendFileMissing() {
-	sfs.out <- *NewMessage(sfs.id, MessageFileMissing)
+	sfs.network.send(*NewMessage(sfs.id, MessageFileMissing))
 }
 
 func (sfs *ServerFileState) sendRequestBinary() {
-	sfs.out <- *NewMessage(sfs.id, MessageRequestBinary)
+	sfs.network.send(*NewMessage(sfs.id, MessageRequestBinary))
 }
