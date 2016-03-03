@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
-	"path/filepath"
 	"os"
+	"path/filepath"
 )
 
 type BackupServerConfig struct {
@@ -15,7 +15,7 @@ type BackupServerConfig struct {
 type ServerConfig struct {
 	FilePath string `json:"file_path"`
 	DbPath   string `json:"db_path"`
-	Port int `json:"port"`
+	Port     int    `json:"port"`
 }
 
 type Server struct {
@@ -31,7 +31,7 @@ func NewServer(config ServerConfig) (server *Server, err error) {
 
 	return &Server{
 		config: config,
-		db: db,
+		db:     db,
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 	for {
 		msg := network.getMessage()
 		log.Printf("Server got: %v", msg)
-		if msg.t == MessageStartFile {
+		if msg.T == MessageStartFile {
 			fileData := DataStartFile{}
 			msg.decode(&fileData)
 			sfs, err := NewServerFileState(fileData, server, network)

@@ -4,7 +4,7 @@ func main() {
 	clientComm, serverComm := NewChannelNetwork()
 
 	go func() {
-		PerformBackup(BackupClientConfig{}, clientComm)
+		PerformBackup(ClientConfig{}, clientComm)
 	}()
 	ServeBackup(BackupServerConfig{}, serverComm)
 }

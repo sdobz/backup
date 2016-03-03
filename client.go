@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"github.com/gobwas/glob"
+	"github.com/kalafut/imohash"
 	"io"
 	"log"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-type BackupClientConfig struct {
+type ClientConfig struct {
 	specFile string
 }
 
@@ -38,6 +39,44 @@ type BackupStats struct {
 	end          time.Time
 	filesChecked uint64
 	globsChecked uint64
+}
+
+type Client struct{}
+
+func (client *Client) GetFileInfo(filename string) os.FileInfo {
+	info, err := os.Stat(filename)
+	if err != nil {
+		// TODO: Handle error
+		log.Fatal(err)
+	}
+
+	return info
+}
+
+func (client *Client) GetDedupeHash(filename string) FileDedupeHash {
+	var hash FileDedupeHash
+	hash, err := imohash.SumFile(filename)
+	if err != nil {
+		// TODO: Handle error
+		log.Fatal(err)
+	}
+
+	return hash
+}
+
+func (client *Client) GetFileChunk(filename string, offset int) []byte {
+	// TODO: Track handles
+	file, err := os.Open(filename) // For read access.
+	if err != nil {
+		log.Fatal(err)
+	}
+	data := make([]byte, ChunkSize)
+	count, err := file.Read(data)
+	if err != io.EOF && err != nil {
+		log.Fatal(err)
+	}
+
+	return data[:count]
 }
 
 func (backupStats *BackupStats) duration() time.Duration {
@@ -163,7 +202,7 @@ func expandTilde(path string) string {
 }
 
 // Tell server to start backup session, specifying a directory
-func PerformBackup(config BackupClientConfig, network NetworkInterface) {
+func PerformBackup(config ClientConfig, network NetworkInterface) {
 	specFile := ""
 	if config.specFile == "" {
 		specFile = "~/.backup"
