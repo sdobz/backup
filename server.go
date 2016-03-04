@@ -108,9 +108,8 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 	for {
 		msg := network.getMessage()
 		log.Printf("Server got: %v", msg)
-		if msg.T == MessageStartFile {
-			fileData := DataStartFile{}
-			msg.decode(&fileData)
+		if msg.Type == MessageStartFile {
+			fileData := DataStartFile(msg.Decode())
 			sfs, err := NewServerFileState(fileData, server, network)
 			if err != nil {
 				log.Fatal(err)

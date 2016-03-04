@@ -10,6 +10,8 @@ import (
 	"github.com/kalafut/imohash"
 	"os"
 	"time"
+	"crypto/rand"
+	"log"
 )
 
 type Session string
@@ -33,14 +35,14 @@ type FileVerificationHash string
 type MessageType int
 
 const (
-	// All messages include id
-	MessageRequestSession   MessageType = iota // Client -> Server
+	MessageRequestSession   MessageType = iota // Client -> Server {nil}
+	MessageSession								// Client <- Server {session}
 	MessageStartFile                           // Client -> Server {filename, modified}
-	MessageFileOK                              // Client <- Server
+	MessageFileOK                              // Client <- Server {
 	MessageFileVerification                    // Client <- Server {file date, md5}
-	MessageFileMissing                         // Client <- Server
-	MessageDedupeHash                          // Client -> Server {dedupehash}
-	MessageRequestBinary                       // Client <- Server
+	MessageFileMissing                         // Client <- Server {id}
+	MessageDedupeHash                          // Client -> Server {id, dedupehash}
+	MessageRequestBinary                       // Client <- Server {id}
 	MessageFileChunk                           // Client -> Server {filesize, offset, chunk}
 )
 
@@ -66,17 +68,17 @@ func (mt MessageType) String() string {
 
 type Message struct {
 	Session Session
-	T       MessageType
+	Type    MessageType
 	d       []byte
 }
 
 func (msg Message) String() string {
-	return fmt.Sprintf("M[%s] %v", msg.Session[:4], msg.T)
+	return fmt.Sprintf("M[%s] %v", msg.Session[:4], msg.Type)
 }
 
 func NewMessage(t MessageType, d *interface{}) *Message {
 	msg := &Message{
-		T: t,
+		Type: t,
 	}
 
 	if d != nil {
@@ -176,6 +178,19 @@ func (state ClientStateEnum) String() string {
 	return "Unknown"
 }
 
+const ClientTokenSize = 32
+
+type ClientToken [ClientTokenSize]byte
+
+func NewClientToken() ClientToken {
+	clientToken := make(ClientToken, ClientTokenSize)
+	_, err := rand.Read(clientToken)
+	if err != nil {
+		log.Fatal("error:", err)
+	}
+	return clientToken
+}
+
 type ClientInterface interface {
 	Send(Message)
 	GetFileInfo(string) os.FileInfo
@@ -186,18 +201,22 @@ type ClientInterface interface {
 type ClientState struct {
 	session   Session
 	state     ClientStateEnum
+	token     ClientToken
 	fileState map[FileId]ClientFileState
 }
 
 func (cs *ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
+
+
 
 // TODO: figure out client/server session
 // TODO: Implement ClientState handleMessage
 
 func NewClientState(client ClientInterface) *ClientState {
 	cs := ClientState{
-		session:   "",
+		session:   Session{},
 		state:     ClientStateInit,
+		token: NewClientToken(),
 		fileState: make(map[FileId]ClientFileState),
 	}
 
@@ -207,8 +226,22 @@ func NewClientState(client ClientInterface) *ClientState {
 	return cs
 }
 
+func (cs *ClientState) handleMessage(client ClientInterface, msg Message) error {
+	if cs.state == ClientStateInit {
+		if msg.Type == MessageSession {
+			cs.session = Session(msg.Decode())
+			return nil
+		}
+	}
+	return errors.New("Unhandled Client State")
+}
+
 func (cs *ClientState) sendRequestSession(client ClientInterface) {
 	client.Send(NewMessage(MessageRequestSession, nil))
+}
+
+func (cs *ClientState) sendFiles(client ClientInterface) {
+	cfs :=
 }
 
 type ClientFileState struct {
@@ -248,29 +281,29 @@ func NewClientFileState(client ClientInterface, filename string) (cfs *ClientFil
 
 func (cfs *ClientFileState) handleMessage(client ClientInterface, msg Message) error {
 	if cfs.state == ClientStateCheckingStatus {
-		if msg.T == MessageFileOK {
+		if msg.Type == MessageFileOK {
 			cfs.state = ClientStateFileOK
 			return nil
 		}
-		if msg.T == MessageFileVerification {
+		if msg.Type == MessageFileVerification {
 			// TODO: hash file for verification
 			return nil
 		}
-		if msg.T == MessageFileMissing {
+		if msg.Type == MessageFileMissing {
 			cfs.sendDedupeHash(client)
 			return nil
 		}
-		if msg.T == MessageRequestBinary {
+		if msg.Type == MessageRequestBinary {
 			cfs.state = ClientStateSendingBinary
 			cfs.sendFileChunk(client)
 			return nil
 		}
 	} else if cfs.state == ClientStateSendingBinary {
-		if msg.T == MessageRequestBinary {
+		if msg.Type == MessageRequestBinary {
 			cfs.sendFileChunk(client)
 			return nil
 		}
-		if msg.T == MessageFileOK {
+		if msg.Type == MessageFileOK {
 			cfs.state = ClientStateFileOK
 			return nil
 		}
@@ -279,12 +312,11 @@ func (cfs *ClientFileState) handleMessage(client ClientInterface, msg Message) e
 }
 
 func (cfs *ClientFileState) sendStartFile(client ClientInterface, modTime time.Time) {
-	msg := NewMessage(MessageStartFile, &DataStartFile{
+	client.Send(NewMessage(MessageStartFile, &DataStartFile{
 		Id:       cfs.id,
 		Filename: cfs.filename,
 		Modified: modTime,
-	})
-	client.Send(*msg)
+	}))
 }
 
 func (cfs *ClientFileState) sendDedupeHash(client ClientInterface) {
@@ -383,7 +415,7 @@ func NewServerFileState(fileData DataStartFile, network NetworkInterface) (sfs *
 
 func (sfs *ServerFileState) handleMessage(server ServerSessionInterface, msg Message) error {
 	if sfs.state == ServerStateInit {
-		if msg.T == MessageStartFile {
+		if msg.Type == MessageStartFile {
 			fileData := DataStartFile(msg.Decode())
 			if !server.HasFile(fileData.Filename) {
 				sfs.sendFileMissing(server)
@@ -398,7 +430,7 @@ func (sfs *ServerFileState) handleMessage(server ServerSessionInterface, msg Mes
 			return nil
 		}
 	} else if sfs.state == ServerStateCheckingDedupeHash {
-		if msg.T == MessageDedupeHash {
+		if msg.Type == MessageDedupeHash {
 			dedupeData := DataDedupeHash(msg.Decode())
 			if server.HasDedupeHash(dedupeData.Hash) {
 				sfs.sendFileOK(server)
@@ -410,7 +442,7 @@ func (sfs *ServerFileState) handleMessage(server ServerSessionInterface, msg Mes
 			return nil
 		}
 	} else if sfs.state == ServerStateCheckingVerificationHash {
-		if msg.T == MessageFileVerification {
+		if msg.Type == MessageFileVerification {
 			verificationData := DataFileVerification(msg.Decode())
 			if server.HasVerificationHash(verificationData.Hash) {
 				sfs.sendFileOK(server)
@@ -422,7 +454,7 @@ func (sfs *ServerFileState) handleMessage(server ServerSessionInterface, msg Mes
 			return nil
 		}
 	} else if sfs.state == ServerStateGettingBinary {
-		if msg.T == MessageFileChunk {
+		if msg.Type == MessageFileChunk {
 			dataChunk := DataFileChunk(msg.Decode())
 			server.StoreBinary(dataChunk.Chunk)
 			if dataChunk.Filesize == dataChunk.Offset+int64(len(dataChunk.Chunk)) {

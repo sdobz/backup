@@ -12,6 +12,9 @@ type ChannelNetwork struct {
 	recvChan <-chan Message
 }
 
+// Ensure ChannelNetwork satisfies NetworkInterface
+var _ NetworkInterface = (*ChannelNetwork)(nil)
+
 func NewChannelNetwork() (client *ChannelNetwork, server *ChannelNetwork) {
 	clientChan := make(chan Message)
 	serverChan := make(chan Message)

@@ -30,8 +30,8 @@ type BackupSpec struct {
 }
 
 type BackupFile struct {
-	path string
-	err  error
+	filename string
+	err      error
 }
 
 type BackupStats struct {
@@ -241,7 +241,7 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 			log.Fatal(backupFile.err)
 		}
 
-		cfs, err := NewClientFileState(backupFile.path, network)
+		cfs, err := NewClientFileState(backupFile.filename, network)
 		if err != nil {
 			log.Fatal(err)
 		}
