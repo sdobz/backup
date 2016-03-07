@@ -17,8 +17,8 @@ func NewDB(filename string) (db *DB, err error) {
 	return &DB{sqlDb}, nil
 }
 
-func (db *DB) getVerification(id FileId) DataFileVerification {
-	return DataFileVerification{}
+func (db *DB) getVerification(id FileId) FileVerificationHash {
+	return FileVerificationHash{}
 }
 
 func (db *DB) hasDedupeHash(hash FileDedupeHash) bool {

@@ -1,10 +1,10 @@
 package main
 
 func main() {
-	clientComm, serverComm := NewChannelNetwork()
+	//clientComm, serverComm := NewChannelNetwork()
 
 	go func() {
-		PerformBackup(ClientConfig{}, clientComm)
+		//PerformBackup(ClientConfig{}, clientComm)
 	}()
-	ServeBackup(BackupServerConfig{}, serverComm)
+	//ServeBackup(BackupServerConfig{}, serverComm)
 }

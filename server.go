@@ -48,7 +48,7 @@ func (server *Server) IsExpired(filename string) bool {
 	return false
 }
 
-func (server *Server) GetVerification(id FileId) DataFileVerification {
+func (server *Server) GetVerification(id FileId) FileVerificationHash {
 	return server.db.getVerification(id)
 }
 
@@ -62,6 +62,10 @@ func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
 
 func (server *Server) StoreBinary(chunk []byte) {
 	log.Printf("Got %v bytes", len(chunk))
+}
+
+func (server *Server) Send(msg *Message) {
+
 }
 
 // Get session start request
@@ -103,30 +107,10 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 	if err != nil {
 		log.Panic(err)
 	}
+	serverState := NewServerState(server)
 
-	fileStates := make(map[FileId]*ServerFileState)
 	for {
 		msg := network.getMessage()
-		log.Printf("Server got: %v", msg)
-		if msg.Type == MessageStartFile {
-			fileData := DataStartFile(msg.Decode())
-			sfs, err := NewServerFileState(fileData, server, network)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			if sfs.id != msg.id {
-				log.Fatal("ServerFileState and message id disagree")
-			}
-
-			fileStates[sfs.id] = sfs
-		}
-
-		if sfs, ok := fileStates[msg.id]; ok {
-			go func() {
-				sfs.handleMessage(msg)
-				log.Print(sfs)
-			}()
-		}
+		serverState.handleMessage(server, &msg)
 	}
 }

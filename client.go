@@ -29,11 +29,6 @@ type BackupSpec struct {
 	globs []BackupGlob
 }
 
-type BackupFile struct {
-	filename string
-	err      error
-}
-
 type BackupStats struct {
 	start        time.Time
 	end          time.Time
@@ -41,7 +36,27 @@ type BackupStats struct {
 	globsChecked uint64
 }
 
-type Client struct{}
+func (backupStats *BackupStats) duration() time.Duration {
+	return backupStats.end.Sub(backupStats.start)
+}
+
+type Client struct {
+	backupStats BackupStats
+	backupSpec BackupSpec
+	network NetworkInterface
+}
+
+func NewClient(backupSpec BackupSpec, network NetworkInterface) *Client {
+	return &Client{
+		backupStats: BackupStats{},
+		backupSpec: backupSpec,
+		network: network,
+	}
+}
+
+func (client *Client) Send(msg *Message) {
+	client.network.send(msg)
+}
 
 func (client *Client) GetFileInfo(filename string) os.FileInfo {
 	info, err := os.Stat(filename)
@@ -79,30 +94,26 @@ func (client *Client) GetFileChunk(filename string, offset int) []byte {
 	return data[:count]
 }
 
-func (backupStats *BackupStats) duration() time.Duration {
-	return backupStats.end.Sub(backupStats.start)
-}
 
-func (spec *BackupSpec) enumerate(backupStats *BackupStats) <-chan BackupFile {
-	backupStats.start = time.Now()
+func (client *Client) Enumerate() <-chan string {
+	client.backupStats.start = time.Now()
 
-	ch := make(chan BackupFile, 100)
+	ch := make(chan string, 100)
 	// log.Print("Enumerate...")
 	go func() {
 		// For every glob
-		for _, glob := range spec.globs {
+		for _, glob := range client.backupSpec.globs {
 			if glob.include && glob.root != "" {
 				// log.Print("Walk: ", glob.root)
 				// Walk over any absolute included paths
 				filepath.Walk(glob.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
-					backupStats.filesChecked += 1
-
 					if err != nil {
-						ch <- BackupFile{"", err}
-						return nil
+						return err
 					}
 
-					if !!info.IsDir() {
+					client.backupStats.filesChecked += 1
+
+					if info.IsDir() {
 						return nil
 					}
 
@@ -110,28 +121,28 @@ func (spec *BackupSpec) enumerate(backupStats *BackupStats) <-chan BackupFile {
 
 					// Check the matched path against all globs
 					include := false
-					for _, elimGlob := range spec.globs {
+					for _, elimGlob := range client.backupSpec.globs {
 						// If it matches a glob then mark the file as included or excluded depending on the glob
 						// If the glob include matches the current include state then it cannot change the value
 						//   and does not need to be evaluated
 						if elimGlob.include != include {
 							// log.Print("  Checking against glob ", elimGlob.origGlob, " <- ", path)
 							if elimGlob.glob.Match(path) {
-								backupStats.globsChecked += 1
+								client.backupStats.globsChecked += 1
 								include = elimGlob.include
 								// log.Print("    Match! Include: ", include)
 							}
 						}
 					}
 					if include {
-						ch <- BackupFile{path, nil}
+						ch <- path
 					}
 					return nil
 				}))
 			}
 		}
 		close(ch)
-		backupStats.end = time.Now()
+		client.backupStats.end = time.Now()
 	}()
 	return ch
 }
@@ -222,31 +233,16 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 		log.Panic(err)
 	}
 
-	backupStats := BackupStats{}
-	fileStates := make(map[FileId]*ClientFileState)
+	client := NewClient(backupSpec, network)
+	cs := NewClientState(client)
 
 	go func() {
 		for {
 			msg := network.getMessage()
 			log.Printf("Client got: %v", msg)
-			if cfs, ok := fileStates[msg.id]; ok {
-				cfs.handleMessage(msg)
-				log.Print(cfs)
-			}
+			cs.HandleMessage(client, msg)
 		}
 	}()
 
-	for backupFile := range backupSpec.enumerate(&backupStats) {
-		if backupFile.err != nil {
-			log.Fatal(backupFile.err)
-		}
-
-		cfs, err := NewClientFileState(backupFile.filename, network)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fileStates[cfs.id] = cfs
-	}
-	log.Print("Took: ", backupStats.duration().Seconds(), "s")
+	log.Print("Took: ", client.backupStats.duration().Seconds(), "s")
 }

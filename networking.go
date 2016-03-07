@@ -4,7 +4,7 @@ import "log"
 
 type NetworkInterface interface {
 	getMessage() Message
-	send(Message)
+	send(*Message)
 }
 
 type ChannelNetwork struct {
@@ -36,7 +36,7 @@ func (cn *ChannelNetwork) getMessage() Message {
 	return <-cn.recvChan
 }
 
-func (cn *ChannelNetwork) send(msg Message) {
+func (cn *ChannelNetwork) send(msg *Message) {
 	log.Printf("Sending: %v", msg)
-	go func() { cn.sendChan <- msg }()
+	go func() { cn.sendChan <- *msg }()
 }
