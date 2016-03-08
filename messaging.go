@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"github.com/kalafut/imohash"
 	"log"
-	"os"
 	"time"
 )
 
@@ -19,10 +18,9 @@ const SessionSize = 32
 type Session [SessionSize]byte
 
 func NewSession() Session {
-	// TODO: C style copy?
-	session := Session{}
-	copy(session[:], NewRandomBytes(SessionSize))
-	return session
+	b := [SessionSize]byte{}
+	copy(b[:], NewRandomBytes(SessionSize))
+	return Session(b)
 }
 
 func (session Session) String() string { return string(session[:4]) }
@@ -176,7 +174,7 @@ const (
 
 	// Client file state
 	ClientStateCheckingStatus // Sent modified time to server
-	ClientStateFileOK         // File received by server
+	ClientStateFileOK         // File has been received by server
 	ClientStateSendingBinary  // Server requested binary
 )
 
@@ -211,12 +209,15 @@ func NewRandomBytes(size int) []byte {
 }
 
 func NewClientToken() ClientToken {
-	return ClientToken(NewRandomBytes(ClientTokenSize))
+	b := [ClientTokenSize]byte{}
+	copy(b[:], NewRandomBytes(ClientTokenSize))
+	return ClientToken(b)
+
 }
 
 type ClientInterface interface {
 	Send(*Message)
-	GetFileInfo(string) os.FileInfo
+	GetFileInfo(string) PartialFileInfo
 	GetDedupeHash(string) FileDedupeHash
 	GetFileChunk(string, int) []byte
 	Enumerate() <-chan string
@@ -224,7 +225,7 @@ type ClientInterface interface {
 
 const ClientTokenSize = 32
 
-type ClientToken []byte
+type ClientToken [ClientTokenSize]byte
 
 type ClientState struct {
 	session   Session

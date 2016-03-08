@@ -46,6 +46,9 @@ type Client struct {
 	network NetworkInterface
 }
 
+// Verify Client implements ClientInterface
+var _ ClientInterface = (*Client)(nil)
+
 func NewClient(backupSpec BackupSpec, network NetworkInterface) *Client {
 	return &Client{
 		backupStats: BackupStats{},
@@ -58,7 +61,12 @@ func (client *Client) Send(msg *Message) {
 	client.network.send(msg)
 }
 
-func (client *Client) GetFileInfo(filename string) os.FileInfo {
+type PartialFileInfo interface {
+	Size() int64
+	ModTime() time.Time
+}
+
+func (client *Client) GetFileInfo(filename string) PartialFileInfo {
 	info, err := os.Stat(filename)
 	if err != nil {
 		// TODO: Handle error

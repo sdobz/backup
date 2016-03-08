@@ -23,6 +23,8 @@ type Server struct {
 	db     *DB
 }
 
+var _ ServerInterface = (*Server)(nil)
+
 func NewServer(config ServerConfig) (server *Server, err error) {
 	db, err := NewDB(config.DbPath)
 	if err != nil {
