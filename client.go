@@ -42,8 +42,8 @@ func (backupStats *BackupStats) duration() time.Duration {
 
 type Client struct {
 	backupStats BackupStats
-	backupSpec BackupSpec
-	network NetworkInterface
+	backupSpec  BackupSpec
+	network     NetworkInterface
 }
 
 // Verify Client implements ClientInterface
@@ -52,8 +52,8 @@ var _ ClientInterface = (*Client)(nil)
 func NewClient(backupSpec BackupSpec, network NetworkInterface) *Client {
 	return &Client{
 		backupStats: BackupStats{},
-		backupSpec: backupSpec,
-		network: network,
+		backupSpec:  backupSpec,
+		network:     network,
 	}
 }
 
@@ -101,7 +101,6 @@ func (client *Client) GetFileChunk(filename string, offset int) []byte {
 
 	return data[:count]
 }
-
 
 func (client *Client) Enumerate() <-chan string {
 	client.backupStats.start = time.Now()

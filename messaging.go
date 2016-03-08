@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-
 const SessionSize = 32
+
 type Session [SessionSize]byte
 
 func NewSession() Session {
@@ -36,7 +36,9 @@ func NewFileId(str string) FileId {
 }
 
 type FileDedupeHash [imohash.Size]byte
+
 const VerificationHashSize = 32
+
 type FileVerificationHash [VerificationHashSize]byte
 
 // Message information
@@ -52,11 +54,15 @@ const (
 	MessageDedupeHash                          // Client -> Server {id, dedupehash}
 	MessageRequestBinary                       // Client <- Server {id}
 	MessageFileChunk                           // Client -> Server {filesize, offset, chunk}
-	MessageDone				   // Client -> Server
+	MessageDone                                // Client -> Server
 )
 
 func (mt MessageType) String() string {
 	switch mt {
+	case MessageRequestSession:
+		return "Request Session"
+	case MessageSession:
+		return "Session"
 	case MessageStartFile:
 		return "Start File"
 	case MessageFileOK:
@@ -100,6 +106,7 @@ func NewMessage(t MessageType, data interface{}) *Message {
 }
 
 func (msg *Message) encode(data interface{}) *Message {
+	_ = "breakpoint"
 	buf := bytes.NewBuffer(msg.d)
 	enc := gob.NewEncoder(buf)
 	enc.Encode(data)
@@ -113,12 +120,12 @@ func (msg *Message) Decode(data interface{}) error {
 }
 
 type DataRequestSession struct {
-	token ClientToken
+	Token ClientToken
 }
 
 type DataSession struct {
-	token ClientToken
-	session Session
+	Token   ClientToken
+	Session Session
 }
 
 type DataFileId struct {
@@ -198,7 +205,6 @@ func (state ClientStateEnum) String() string {
 	return "Unknown"
 }
 
-
 func NewRandomBytes(size int) []byte {
 	d := make([]byte, size)
 	_, err := rand.Read([]byte(d))
@@ -255,7 +261,7 @@ func (cs *ClientState) HandleMessage(client ClientInterface, msg Message) error 
 		if msg.Type == MessageSession {
 			sessionData := DataSession{}
 			msg.Decode(&sessionData)
-			cs.session = sessionData.session
+			cs.session = sessionData.Session
 			cs.state = ClientStateCheckingFiles
 			return nil
 		}
@@ -293,7 +299,7 @@ func (cs *ClientState) handleFileMessage(client ClientInterface, msg Message) er
 
 func (cs *ClientState) sendRequestSession(client ClientInterface) {
 	client.Send(NewMessage(MessageRequestSession, &DataRequestSession{
-		token: cs.token,
+		Token: cs.token,
 	}))
 }
 
@@ -458,7 +464,7 @@ func (ss *ServerState) handleMessage(server ServerInterface, msg *Message) error
 	if msg.Type == MessageRequestSession {
 		dataRequestSession := DataRequestSession{}
 		msg.Decode(dataRequestSession)
-		ss.initSession(server, dataRequestSession.token)
+		ss.initSession(server, dataRequestSession.Token)
 		return nil
 	}
 
@@ -497,8 +503,8 @@ func (ss *ServerState) isValidSession(session Session) bool {
 
 func (ss *ServerState) sendSession(server ServerInterface, token ClientToken, session Session) {
 	server.Send(NewMessage(MessageSession, &DataSession{
-		token: token,
-		session: session,
+		Token:   token,
+		Session: session,
 	}))
 }
 
@@ -509,7 +515,7 @@ type ServerFileState struct {
 	dedupeHash FileDedupeHash
 	filesize   int64
 	offset     int
-	network NetworkInterface
+	network    NetworkInterface
 }
 
 func (sfs *ServerFileState) String() string {
