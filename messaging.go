@@ -257,13 +257,17 @@ func NewClientState(client ClientInterface) *ClientState {
 	return cs
 }
 
-func (cs *ClientState) HandleMessage(msg Message) error {
+func (cs *ClientState) handleMessage(msg *Message) error {
 	if cs.state == ClientStateGettingSession {
 		if msg.Type == MessageSession {
 			sessionData := DataSession{}
 			msg.Decode(&sessionData)
+			if sessionData.Token != cs.token {
+				return errors.New("Recieved invalid token")
+			}
 			cs.session = sessionData.Session
 			cs.state = ClientStateCheckingFiles
+			cs.sendFiles()
 			return nil
 		}
 	} else if cs.state == ClientStateCheckingFiles {
@@ -281,7 +285,7 @@ func (cs *ClientState) HandleMessage(msg Message) error {
 	return errors.New("Unhandled Client State")
 }
 
-func (cs *ClientState) handleFileMessage(msg Message) error {
+func (cs *ClientState) handleFileMessage(msg *Message) error {
 	fileIdData := DataFileId{}
 	err := msg.Decode(&fileIdData)
 	if err != nil {
@@ -352,7 +356,7 @@ func NewClientFileState(client ClientInterface, filename string) (cfs *ClientFil
 	return cfs, nil
 }
 
-func (cfs *ClientFileState) handleMessage(msg Message) error {
+func (cfs *ClientFileState) handleMessage(msg *Message) error {
 	if cfs.state == ClientStateCheckingStatus {
 		if msg.Type == MessageFileOK {
 			cfs.state = ClientStateFileOK

@@ -37,12 +37,21 @@ func TestMessageDataEncoding(t *testing.T) {
 
 type MockClient struct {
 	messages []*Message
+	files []string
+	enumeratedFiles bool
 }
 
 var _ ClientInterface = (*MockClient)(nil)
 
 func (client *MockClient) Enumerate() <-chan string {
-	ch := make(<-chan string)
+	client.enumeratedFiles = true
+	ch := make(chan string)
+	go func() {
+		for _, filename := range client.files {
+			ch <- filename
+		}
+		close(ch)
+	}()
 	return ch
 }
 
@@ -169,11 +178,16 @@ func TestClientRequestsSession(t *testing.T) {
 	client := &MockClient{}
 	clientState := NewClientState(client)
 
+	if clientState.state != ClientStateGettingSession {
+		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateGettingSession)
+	}
+
 	client.assertSentMessages(t, []*Message{
 		NewMessage(MessageRequestSession, &DataRequestSession{
 			Token: clientState.token,
 		}),
 	})
+
 }
 
 func TestServerRespondsWithSession(t *testing.T) {
@@ -191,6 +205,55 @@ func TestServerRespondsWithSession(t *testing.T) {
 			Session: server.session,
 		}),
 	})
+}
+
+func TestClientDoesNotAcceptSessionWithIncorrectToken(t *testing.T) {
+	client := &MockClient{}
+	clientState := NewClientState(client)
+	clientState.state = ClientStateGettingSession
+	session := Session{1,2,3,4,5}
+	validToken := ClientToken{1,2,3,4,5}
+	invalidToken := ClientToken{5,4,3,2,1}
+	clientState.token = validToken
+
+	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
+		Session: session,
+		Token: invalidToken,
+	}))
+
+	if clientState.session == session {
+		t.Fatal("Client accept session with invalid token")
+	}
+
+	if clientState.state != ClientStateGettingSession {
+		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateGettingSession)
+	}
+}
+
+func TestClientChecksFilesAfterGettingSession(t *testing.T) {
+	client := &MockClient{}
+	clientState := NewClientState(client)
+	clientState.state = ClientStateGettingSession
+	session := Session{1,2,3,4,5}
+	token := ClientToken{1,2,3,4,5}
+	clientState.token = token
+
+	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
+		Session: session,
+		Token: token,
+	}))
+
+	if clientState.session != session {
+		t.Fatal("Client state did not store session")
+	}
+
+	if clientState.state != ClientStateCheckingFiles {
+		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateCheckingFiles)
+	}
+
+	if client.enumeratedFiles != true {
+		t.Fatal("Client did not start enumerating files")
+	}
 }
 
 // Server: Test getting session request sends session
