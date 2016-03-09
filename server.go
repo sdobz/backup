@@ -19,21 +19,23 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	config ServerConfig
-	db     *DB
+	config  ServerConfig
+	db      *DB
+	network NetworkInterface
 }
 
 var _ ServerInterface = (*Server)(nil)
 
-func NewServer(config ServerConfig) (server *Server, err error) {
+func NewServer(config ServerConfig, network NetworkInterface) (server *Server, err error) {
 	db, err := NewDB(config.DbPath)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Server{
-		config: config,
-		db:     db,
+		config:  config,
+		db:      db,
+		network: network,
 	}, nil
 }
 
@@ -67,7 +69,11 @@ func (server *Server) StoreBinary(chunk []byte) {
 }
 
 func (server *Server) Send(msg *Message) {
+	server.network.send(msg)
+}
 
+func (server *Server) NewSession() Session {
+	return NewSession()
 }
 
 // Get session start request
@@ -105,7 +111,7 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 	serverConfig.FilePath = expandTilde(serverConfig.FilePath)
 	serverConfig.DbPath = expandTilde(serverConfig.DbPath)
 
-	server, err := NewServer(serverConfig)
+	server, err := NewServer(serverConfig, network)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -113,6 +119,6 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 
 	for {
 		msg := network.getMessage()
-		serverState.handleMessage(server, &msg)
+		serverState.handleMessage(&msg)
 	}
 }

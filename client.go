@@ -247,7 +247,7 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 		for {
 			msg := network.getMessage()
 			log.Printf("Client got: %v", msg)
-			cs.HandleMessage(client, msg)
+			cs.HandleMessage(msg)
 		}
 	}()
 
