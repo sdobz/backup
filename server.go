@@ -44,6 +44,7 @@ func (server *Server) absolutePath(filename string) string {
 }
 
 func (server *Server) HasFile(filename string) bool {
+	// TODO: compare modification time
 	_, err := os.Stat(server.absolutePath(filename))
 	return err == nil
 }

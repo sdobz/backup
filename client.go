@@ -242,6 +242,7 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 
 	client := NewClient(backupSpec, network)
 	cs := NewClientState(client)
+	cs.requestSession()
 
 	go func() {
 		for {

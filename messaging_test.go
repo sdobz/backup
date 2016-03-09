@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,23 +37,44 @@ func TestMessageDataEncoding(t *testing.T) {
 }
 
 type MockClient struct {
-	messages []*Message
-	files []string
+	// Populated by client.Send
+	messages        []*Message
+	// Tracks whether files were enumerated
 	enumeratedFiles bool
+	// Tracks when file enumeration finishes
+	wg              sync.WaitGroup
+	// The following populated by InitializeFile
+	files           []string
+	dedupeStore	map[string]FileDedupeHash
+	fileInfoStore	map[string]MockFileInfo
 }
 
 var _ ClientInterface = (*MockClient)(nil)
 
+func NewMockClient() *MockClient {
+	return &MockClient{
+		dedupeStore: make(map[string]FileDedupeHash),
+		fileInfoStore: make(map[string]MockFileInfo),
+	}
+}
+
 func (client *MockClient) Enumerate() <-chan string {
 	client.enumeratedFiles = true
 	ch := make(chan string)
+	client.wg.Add(len(client.files))
 	go func() {
 		for _, filename := range client.files {
 			ch <- filename
+			client.wg.Done()
 		}
 		close(ch)
 	}()
 	return ch
+}
+
+// Test helper
+func (client *MockClient) WaitForEnumerationFinish() {
+	client.wg.Wait()
 }
 
 func (client *MockClient) Send(msg *Message) {
@@ -75,7 +97,7 @@ func (info MockFileInfo) ModTime() time.Time {
 func (client *MockClient) assertSentMessages(t *testing.T, msgs []*Message) {
 	if len(client.messages) != len(msgs) {
 		t.Fail()
-		t.Logf("Client expected %v messages but recieved %v", len(msgs), len(client.messages))
+		t.Logf("Client expected to send %v messages but sent %v", len(msgs), len(client.messages))
 	}
 
 	for i, msg := range client.messages {
@@ -98,10 +120,18 @@ func (client *MockClient) assertSentMessages(t *testing.T, msgs []*Message) {
 }
 
 func (client *MockClient) GetFileInfo(filename string) PartialFileInfo {
+	fileInfo, ok := client.fileInfoStore[filename]
+	if ok {
+		return fileInfo
+	}
 	return MockFileInfo{}
 }
 
 func (client *MockClient) GetDedupeHash(filename string) FileDedupeHash {
+	dedupe, ok := client.dedupeStore[filename]
+	if ok {
+		return dedupe
+	}
 	return FileDedupeHash{}
 }
 
@@ -109,12 +139,35 @@ func (client *MockClient) GetFileChunk(filename string, offset int) []byte {
 	return []byte{}
 }
 
+// Testing helper
+func (client *MockClient) InitializeFile(filename string, fileInfo MockFileInfo, dedupe FileDedupeHash) {
+	client.files = append(client.files, filename)
+	client.dedupeStore[filename] = dedupe
+	client.fileInfoStore[filename] = fileInfo
+}
+
+func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
+	cfs := NewClientFileState(cs.client, filename)
+	cfs.state = state
+	cs.fileState[cfs.id] = *cfs
+}
+
 type MockServer struct {
 	messages []*Message
 	session  Session
+	files []string
+	dedupeStore map[FileDedupeHash]struct{}
+	fileInfoStore map[string]MockFileInfo
 }
 
 var _ ServerInterface = (*MockServer)(nil)
+
+func NewMockServer() *MockServer {
+	return &MockServer{
+		dedupeStore: make(map[FileDedupeHash]struct{}),
+		fileInfoStore: make(map[string]MockFileInfo),
+	}
+}
 
 func (server *MockServer) Send(msg *Message) {
 	server.messages = append(server.messages, msg)
@@ -123,7 +176,7 @@ func (server *MockServer) Send(msg *Message) {
 func (server *MockServer) assertSentMessages(t *testing.T, msgs []*Message) {
 	if len(server.messages) != len(msgs) {
 		t.Fail()
-		t.Logf("Server expected %v messages but recieved %v", len(msgs), len(server.messages))
+		t.Logf("Server expected to send %v messages but sent %v", len(msgs), len(server.messages))
 	}
 
 	for i, msg := range server.messages {
@@ -145,7 +198,12 @@ func (server *MockServer) assertSentMessages(t *testing.T, msgs []*Message) {
 	}
 }
 
-func (server *MockServer) HasFile(string) bool {
+func (server *MockServer) HasFile(filename string) bool {
+	for _, a := range server.files {
+		if a == filename {
+			return true
+		}
+	}
 	return false
 }
 
@@ -172,11 +230,37 @@ func (server *MockServer) NewSession() Session {
 	return server.session
 }
 
+// Test helper
+func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo, dedupe FileDedupeHash) {
+	server.files = append(server.files, filename)
+	server.fileInfoStore[filename] = fileInfo
+	server.dedupeStore[dedupe] = struct{}{}
+}
+
+// Test helpers
+func NewSessionMessage(session Session, t MessageType, d interface{}) *Message {
+	msg := NewMessage(t, d)
+	msg.Session = session
+	return msg
+}
+
+
 // Test all side effects
 
+func TestClientStateInitializesToken(t *testing.T) {
+	client := NewMockClient()
+	cs := NewClientState(client)
+	emptyToken := ClientToken{}
+
+	if cs.token == emptyToken {
+		t.Fatal("Client state has zero-value token")
+	}
+}
+
 func TestClientRequestsSession(t *testing.T) {
-	client := &MockClient{}
+	client := NewMockClient()
 	clientState := NewClientState(client)
+	clientState.requestSession()
 
 	if clientState.state != ClientStateGettingSession {
 		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateGettingSession)
@@ -191,7 +275,7 @@ func TestClientRequestsSession(t *testing.T) {
 }
 
 func TestServerRespondsWithSession(t *testing.T) {
-	server := &MockServer{}
+	server := NewMockServer()
 	serverState := NewServerState(server)
 	clientToken := ClientToken{1, 2, 3, 4, 5}
 
@@ -208,17 +292,17 @@ func TestServerRespondsWithSession(t *testing.T) {
 }
 
 func TestClientDoesNotAcceptSessionWithIncorrectToken(t *testing.T) {
-	client := &MockClient{}
+	client := NewMockClient()
 	clientState := NewClientState(client)
 	clientState.state = ClientStateGettingSession
-	session := Session{1,2,3,4,5}
-	validToken := ClientToken{1,2,3,4,5}
-	invalidToken := ClientToken{5,4,3,2,1}
+	session := Session{1, 2, 3, 4, 5}
+	validToken := ClientToken{1, 2, 3, 4, 5}
+	invalidToken := ClientToken{5, 4, 3, 2, 1}
 	clientState.token = validToken
 
 	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
 		Session: session,
-		Token: invalidToken,
+		Token:   invalidToken,
 	}))
 
 	if clientState.session == session {
@@ -231,16 +315,16 @@ func TestClientDoesNotAcceptSessionWithIncorrectToken(t *testing.T) {
 }
 
 func TestClientChecksFilesAfterGettingSession(t *testing.T) {
-	client := &MockClient{}
+	client := NewMockClient()
 	clientState := NewClientState(client)
 	clientState.state = ClientStateGettingSession
-	session := Session{1,2,3,4,5}
-	token := ClientToken{1,2,3,4,5}
+	session := Session{1, 2, 3, 4, 5}
+	token := ClientToken{1, 2, 3, 4, 5}
 	clientState.token = token
 
 	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
 		Session: session,
-		Token: token,
+		Token:   token,
 	}))
 
 	if clientState.session != session {
@@ -256,8 +340,84 @@ func TestClientChecksFilesAfterGettingSession(t *testing.T) {
 	}
 }
 
-// Server: Test getting session request sends session
-// Client: Test getting session starts enumeration
+func TestClientSendsMessagesEnumeratingFiles(t *testing.T) {
+	client := NewMockClient()
+	client.InitializeFile("file1", MockFileInfo{}, FileDedupeHash{})
+	client.InitializeFile("file2", MockFileInfo{}, FileDedupeHash{})
+	client.InitializeFile("file3", MockFileInfo{}, FileDedupeHash{})
+
+	clientState := NewClientState(client)
+	clientState.state = ClientStateCheckingFiles
+	clientState.sendFiles()
+
+	client.WaitForEnumerationFinish()
+	client.assertSentMessages(t, []*Message{
+		NewMessage(MessageStartFile, &DataStartFile{
+			Id:       NewFileId("file1"),
+			Filename: "file1",
+			Modified: time.Time{},
+		}),
+		NewMessage(MessageStartFile, &DataStartFile{
+			Id:       NewFileId("file2"),
+			Filename: "file2",
+			Modified: time.Time{},
+		}),
+		NewMessage(MessageStartFile, &DataStartFile{
+			Id:       NewFileId("file3"),
+			Filename: "file3",
+			Modified: time.Time{},
+		}),
+	})
+}
+
+func TestServerRequiresValidSession(t *testing.T) {
+
+}
+
+func TestServerRequestsDedupeForMissingFile(t *testing.T) {
+	filename := "file1"
+	fileId := NewFileId(filename)
+
+	server := NewMockServer()
+	serverState := NewServerState(server)
+	session := serverState.initSession()
+
+	serverState.handleMessage(NewSessionMessage(session, MessageStartFile, &DataStartFile{
+		Id: fileId,
+		Filename: filename,
+		Modified: time.Time{},
+	}))
+
+	server.assertSentMessages(t, []*Message{
+		NewMessage(MessageFileMissing, &DataFileMissing{
+			Id: fileId,
+		}),
+	})
+}
+
+func TestClientSendsDedupeWhenFileMissing(t *testing.T) {
+	filename := "file1"
+	fileId := NewFileId(filename)
+	dedupe := FileDedupeHash{1,2,3,4,5}
+
+	// Setup client to just after sending files
+	client := NewMockClient()
+	client.InitializeFile(filename, MockFileInfo{}, dedupe)
+	clientState := NewClientState(client)
+	clientState.state = ClientStateCheckingFiles
+	clientState.InitializeFile(filename, ClientStateCheckingStatus)
+
+	clientState.handleMessage(NewMessage(MessageFileMissing, &DataFileMissing{
+		Id: fileId,
+	}))
+
+	client.assertSentMessages(t, []*Message{
+		NewMessage(MessageDedupeHash, &DataDedupeHash{
+			Id: fileId,
+			Hash: dedupe,
+		}),
+	})
+}
 
 // Client: Test enumeration sends file message
 // Server: Test unmodified file

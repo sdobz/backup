@@ -251,10 +251,16 @@ func NewClientState(client ClientInterface) *ClientState {
 		fileState: make(map[FileId]ClientFileState),
 	}
 
+	return cs
+}
+
+func (cs *ClientState) requestSession() error {
+	if cs.state != ClientStateInit {
+		return errors.New("Requesting session when not init")
+	}
 	cs.sendRequestSession()
 	cs.state = ClientStateGettingSession
-
-	return cs
+	return nil
 }
 
 func (cs *ClientState) handleMessage(msg *Message) error {
@@ -275,11 +281,7 @@ func (cs *ClientState) handleMessage(msg *Message) error {
 			msg.Type == MessageFileVerification ||
 			msg.Type == MessageFileMissing ||
 			msg.Type == MessageRequestBinary {
-			err := cs.handleFileMessage(msg)
-			if err != nil {
-				return err
-			}
-			return nil
+			return cs.handleFileMessage(msg)
 		}
 	}
 	return errors.New("Unhandled Client State")
@@ -310,12 +312,9 @@ func (cs *ClientState) sendRequestSession() {
 
 func (cs *ClientState) sendFiles() {
 	for filename := range cs.client.Enumerate() {
-		cfs, err := NewClientFileState(cs.client, filename)
-		if err != nil {
-			log.Fatal(err)
-		}
-
+		cfs := NewClientFileState(cs.client, filename)
 		cs.fileState[cfs.id] = *cfs
+		cfs.startFile()
 	}
 }
 
@@ -326,6 +325,7 @@ type ClientFileState struct {
 	filename string
 	filesize int64
 	offset   int
+	modTime  time.Time
 }
 
 func (cfs *ClientFileState) String() string {
@@ -336,24 +336,27 @@ func (cfs *ClientFileState) String() string {
 	}
 }
 
-func NewClientFileState(client ClientInterface, filename string) (cfs *ClientFileState, err error) {
+func NewClientFileState(client ClientInterface, filename string) *ClientFileState {
 	// Assert file exists
 
 	fileInfo := client.GetFileInfo(filename)
 
-	cfs = &ClientFileState{
+	cfs := &ClientFileState{
 		client:   client,
 		id:       NewFileId(filename),
 		state:    ClientStateInit,
 		filename: filename,
 		filesize: fileInfo.Size(),
+		modTime:  fileInfo.ModTime(),
 		offset:   0,
 	}
 
-	cfs.sendStartFile(fileInfo.ModTime())
-	cfs.state = ClientStateCheckingStatus
+	return cfs
+}
 
-	return cfs, nil
+func (cfs *ClientFileState) startFile() {
+	cfs.sendStartFile()
+	cfs.state = ClientStateCheckingStatus
 }
 
 func (cfs *ClientFileState) handleMessage(msg *Message) error {
@@ -388,11 +391,11 @@ func (cfs *ClientFileState) handleMessage(msg *Message) error {
 	return errors.New("Unhandled message")
 }
 
-func (cfs *ClientFileState) sendStartFile(modTime time.Time) {
+func (cfs *ClientFileState) sendStartFile() {
 	cfs.client.Send(NewMessage(MessageStartFile, &DataStartFile{
 		Id:       cfs.id,
 		Filename: cfs.filename,
-		Modified: modTime,
+		Modified: cfs.modTime,
 	}))
 }
 
@@ -474,7 +477,8 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	if msg.Type == MessageRequestSession {
 		dataRequestSession := DataRequestSession{}
 		msg.Decode(&dataRequestSession)
-		ss.initSession(dataRequestSession.Token)
+		session := ss.initSession()
+		ss.sendSession(dataRequestSession.Token, session)
 		return nil
 	}
 
@@ -483,6 +487,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 		return errors.New("Invalid session")
 	}
 
+	// If starting a file create the FileState to handle it
 	if msg.Type == MessageStartFile {
 		fileData := DataStartFile{}
 		msg.Decode(&fileData)
@@ -497,18 +502,36 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 
 		ss.fileState[msg.Session][sfs.id] = *sfs
 	}
+
+	if msg.Type == MessageStartFile ||
+		msg.Type == MessageDedupeHash ||
+		msg.Type == MessageFileVerification ||
+		msg.Type == MessageFileChunk {
+		return ss.dispatchMessageToFileState(msg)
+	}
 	return errors.New("Unhandled server message")
 }
 
-func (ss *ServerState) initSession(token ClientToken) {
+func (ss *ServerState) initSession() Session {
 	session := ss.server.NewSession()
 	ss.fileState[session] = make(map[FileId]ServerFileState)
-	ss.sendSession(token, session)
+	return session
 }
 
 func (ss *ServerState) isValidSession(session Session) bool {
 	_, ok := ss.fileState[session]
 	return ok
+}
+
+func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
+	// Known valid session, not known valid id
+	idData := DataFileId{}
+	msg.Decode(&idData)
+	sfs, ok := ss.fileState[msg.Session][idData.Id]
+	if !ok {
+		return errors.New("Dispatching message to nonexistant id")
+	}
+	return sfs.handleMessage(msg)
 }
 
 func (ss *ServerState) sendSession(token ClientToken, session Session) {
@@ -549,7 +572,7 @@ func NewServerFileState(server ServerInterface, fileData DataStartFile) (sfs *Se
 	return sfs, nil
 }
 
-func (sfs *ServerFileState) handleMessage(msg Message) error {
+func (sfs *ServerFileState) handleMessage(msg *Message) error {
 	if sfs.state == ServerStateInit {
 		if msg.Type == MessageStartFile {
 			fileData := DataStartFile{}
