@@ -491,10 +491,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	if msg.Type == MessageStartFile {
 		fileData := DataStartFile{}
 		msg.Decode(&fileData)
-		sfs, err := NewServerFileState(ss.server, fileData)
-		if err != nil {
-			log.Fatal(err)
-		}
+		sfs := NewServerFileState(ss.server, fileData.Filename)
 		// TODO: Fix private
 		if sfs.id != fileData.Id {
 			log.Fatal("ServerFileState and message id disagree")
@@ -560,16 +557,14 @@ func (sfs *ServerFileState) String() string {
 	}
 }
 
-func NewServerFileState(server ServerInterface, fileData DataStartFile) (sfs *ServerFileState, err error) {
+func NewServerFileState(server ServerInterface, filename string) *ServerFileState {
 
-	sfs = &ServerFileState{
+	return &ServerFileState{
 		server:   server,
 		state:    ServerStateInit,
-		filename: fileData.Filename,
-		id:       NewFileId(fileData.Filename),
+		filename: filename,
+		id:       NewFileId(filename),
 	}
-
-	return sfs, nil
 }
 
 func (sfs *ServerFileState) handleMessage(msg *Message) error {
