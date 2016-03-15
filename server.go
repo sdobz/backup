@@ -65,7 +65,7 @@ func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
 	return server.db.hasVerificationHash(hash)
 }
 
-func (server *Server) StoreBinary(chunk []byte) {
+func (server *Server) StoreBinary(filename string, chunk []byte) {
 	log.Printf("Got %v bytes", len(chunk))
 }
 

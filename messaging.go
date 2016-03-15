@@ -438,7 +438,7 @@ type ServerInterface interface {
 	GetVerification(FileId) FileVerificationHash
 	HasDedupeHash(FileDedupeHash) bool
 	HasVerificationHash(FileVerificationHash) bool
-	StoreBinary([]byte)
+	StoreBinary(string, []byte)
 	NewSession() Session
 }
 
@@ -630,7 +630,7 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 		if msg.Type == MessageFileChunk {
 			dataChunk := DataFileChunk{}
 			msg.Decode(&dataChunk)
-			sfs.server.StoreBinary(dataChunk.Chunk)
+			sfs.server.StoreBinary(sfs.filename, dataChunk.Chunk)
 			if dataChunk.Filesize == int64(dataChunk.Offset+len(dataChunk.Chunk)) {
 				sfs.sendFileOK()
 				sfs.state = ServerStateEndBinary

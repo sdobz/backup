@@ -165,6 +165,7 @@ type MockServer struct {
 	files         []string
 	dedupeStore   map[FileDedupeHash]struct{}
 	fileInfoStore map[string]MockFileInfo
+	storedFiles   map[string][]byte
 }
 
 var _ ServerInterface = (*MockServer)(nil)
@@ -173,6 +174,7 @@ func NewMockServer() *MockServer {
 	return &MockServer{
 		dedupeStore:   make(map[FileDedupeHash]struct{}),
 		fileInfoStore: make(map[string]MockFileInfo),
+		storedFiles:   make(map[string][]byte),
 	}
 }
 
@@ -231,7 +233,9 @@ func (server *MockServer) HasVerificationHash(FileVerificationHash) bool {
 	return false
 }
 
-func (server *MockServer) StoreBinary([]byte) {}
+func (server *MockServer) StoreBinary(filename string, chunk []byte) {
+	server.storedFiles[filename] = append(server.storedFiles[filename], chunk...)
+}
 
 func (server *MockServer) NewSession() Session {
 	server.session = NewSession()
@@ -243,6 +247,7 @@ func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo,
 	server.files = append(server.files, filename)
 	server.fileInfoStore[filename] = fileInfo
 	server.dedupeStore[dedupe] = struct{}{}
+	server.storedFiles[filename] = []byte{}
 }
 
 func (ss *ServerState) InitializeFile(filename string, session Session, state ServerStateEnum) {
@@ -550,4 +555,26 @@ func TestClientSendsDataWhenServerRequestsBinary(t *testing.T) {
 			Chunk:    []byte{'e', 'f', 'i', 'l'},
 		}),
 	})
+}
+
+func TestServerSavesDataWhenClientSendsIt(t *testing.T) {
+	filename := "file"
+	fileId := NewFileId(filename)
+
+	server := NewMockServer()
+	server.InitializeFile(filename, MockFileInfo{}, FileDedupeHash{})
+	serverState := NewServerState(server)
+	session := serverState.initSession()
+	serverState.InitializeFile(filename, session, ServerStateGettingBinary)
+
+	serverState.handleMessage(NewSessionMessage(session, MessageFileChunk, &DataFileChunk{
+		Id:       fileId,
+		Filesize: 15,
+		Offset:   0,
+		Chunk:    []byte{'f', 'i', 'l', 'e', 'f'},
+	}))
+
+	if !bytes.Equal(server.storedFiles[filename], []byte{'f', 'i', 'l', 'e', 'f'}) {
+		t.Fatal("Server stored wrong information")
+	}
 }
