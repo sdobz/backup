@@ -135,8 +135,15 @@ func (client *MockClient) GetDedupeHash(filename string) FileDedupeHash {
 	return FileDedupeHash{}
 }
 
-func (client *MockClient) GetFileChunk(filename string, offset int) []byte {
-	return []byte{}
+func (client *MockClient) GetFileChunk(filename string, size int, offset int) []byte {
+	chunk := make([]byte, size)
+	nameLen := len(filename)
+
+	for i := 0; i < size; i++ {
+		chunk[i] = filename[(i+offset)%nameLen]
+	}
+
+	return chunk
 }
 
 // Testing helper
@@ -149,7 +156,7 @@ func (client *MockClient) InitializeFile(filename string, fileInfo MockFileInfo,
 func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
 	cfs := NewClientFileState(cs.client, filename)
 	cfs.state = state
-	cs.fileState[cfs.id] = *cfs
+	cs.fileState[cfs.id] = cfs
 }
 
 type MockServer struct {
@@ -466,7 +473,8 @@ func TestServerRequestsBinaryWhenDedupeDifferent(t *testing.T) {
 
 	server.assertSentMessages(t, []*Message{
 		NewMessage(MessageRequestBinary, &DataRequestBinary{
-			Id: fileId,
+			Id:        fileId,
+			ChunkSize: 1000,
 		}),
 	})
 }
@@ -494,11 +502,52 @@ func TestServerSendsOKWhenDedupeExists(t *testing.T) {
 	})
 }
 
-// Client: Test enumeration sends file message
-// Server: Test unmodified file
-// Client: Test handles fileok
-// Server: Test unknown file sends dedupe
-// Client: Test responds with dedupe
-// Server: Test dedupe exists
-// Server: Test dedupe not exists
-// Client: Test
+func TestClientSendsDataWhenServerRequestsBinary(t *testing.T) {
+	filename := "file"
+	fileId := NewFileId(filename)
+
+	client := NewMockClient()
+	client.InitializeFile(filename, MockFileInfo{
+		size:    15,
+		modTime: time.Time{},
+	}, FileDedupeHash{})
+	clientState := NewClientState(client)
+	clientState.state = ClientStateCheckingFiles
+	clientState.InitializeFile(filename, ClientStateCheckingStatus)
+
+	clientState.handleMessage(NewMessage(MessageRequestBinary, &DataRequestBinary{
+		Id:        fileId,
+		ChunkSize: 5,
+	}))
+
+	clientState.handleMessage(NewMessage(MessageRequestBinary, &DataRequestBinary{
+		Id:        fileId,
+		ChunkSize: 6,
+	}))
+
+	clientState.handleMessage(NewMessage(MessageRequestBinary, &DataRequestBinary{
+		Id:        fileId,
+		ChunkSize: 200,
+	}))
+
+	client.assertSentMessages(t, []*Message{
+		NewMessage(MessageFileChunk, &DataFileChunk{
+			Id:       fileId,
+			Filesize: 15,
+			Offset:   0,
+			Chunk:    []byte{'f', 'i', 'l', 'e', 'f'},
+		}),
+		NewMessage(MessageFileChunk, &DataFileChunk{
+			Id:       fileId,
+			Filesize: 15,
+			Offset:   5,
+			Chunk:    []byte{'i', 'l', 'e', 'f', 'i', 'l'},
+		}),
+		NewMessage(MessageFileChunk, &DataFileChunk{
+			Id:       fileId,
+			Filesize: 15,
+			Offset:   11,
+			Chunk:    []byte{'e', 'f', 'i', 'l'},
+		}),
+	})
+}

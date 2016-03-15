@@ -87,7 +87,7 @@ func (client *Client) GetDedupeHash(filename string) FileDedupeHash {
 	return hash
 }
 
-func (client *Client) GetFileChunk(filename string, offset int) []byte {
+func (client *Client) GetFileChunk(filename string, size int, offset int) []byte {
 	// TODO: Track handles
 	file, err := os.Open(filename) // For read access.
 	if err != nil {

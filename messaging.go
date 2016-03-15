@@ -156,7 +156,8 @@ type DataDedupeHash struct {
 }
 
 type DataRequestBinary struct {
-	Id FileId
+	Id        FileId
+	ChunkSize int
 }
 
 type DataFileChunk struct {
@@ -224,7 +225,7 @@ type ClientInterface interface {
 	Send(*Message)
 	GetFileInfo(string) PartialFileInfo
 	GetDedupeHash(string) FileDedupeHash
-	GetFileChunk(string, int) []byte
+	GetFileChunk(string, int, int) []byte
 	Enumerate() <-chan string
 }
 
@@ -237,7 +238,7 @@ type ClientState struct {
 	session   Session
 	state     ClientStateEnum
 	token     ClientToken
-	fileState map[FileId]ClientFileState
+	fileState map[FileId]*ClientFileState
 }
 
 func (cs *ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
@@ -248,7 +249,7 @@ func NewClientState(client ClientInterface) *ClientState {
 		client:    client,
 		state:     ClientStateInit,
 		token:     NewClientToken(),
-		fileState: make(map[FileId]ClientFileState),
+		fileState: make(map[FileId]*ClientFileState),
 	}
 
 	return cs
@@ -313,7 +314,7 @@ func (cs *ClientState) sendRequestSession() {
 func (cs *ClientState) sendFiles() {
 	for filename := range cs.client.Enumerate() {
 		cfs := NewClientFileState(cs.client, filename)
-		cs.fileState[cfs.id] = *cfs
+		cs.fileState[cfs.id] = cfs
 		cfs.startFile()
 	}
 }
@@ -375,12 +376,16 @@ func (cfs *ClientFileState) handleMessage(msg *Message) error {
 		}
 		if msg.Type == MessageRequestBinary {
 			cfs.state = ClientStateSendingBinary
-			cfs.sendFileChunk()
+			fileChunkData := DataRequestBinary{}
+			msg.Decode(&fileChunkData)
+			cfs.sendFileChunk(fileChunkData.ChunkSize)
 			return nil
 		}
 	} else if cfs.state == ClientStateSendingBinary {
 		if msg.Type == MessageRequestBinary {
-			cfs.sendFileChunk()
+			fileChunkData := DataRequestBinary{}
+			msg.Decode(&fileChunkData)
+			cfs.sendFileChunk(fileChunkData.ChunkSize)
 			return nil
 		}
 		if msg.Type == MessageFileOK {
@@ -406,13 +411,18 @@ func (cfs *ClientFileState) sendDedupeHash() {
 	}))
 }
 
-func (cfs *ClientFileState) sendFileChunk() {
-	data := cfs.client.GetFileChunk(cfs.filename, cfs.offset)
-	msg := NewMessage(MessageFileChunk, DataFileChunk{
+func (cfs *ClientFileState) sendFileChunk(chunkSize int) {
+	if int64(chunkSize+cfs.offset) > cfs.filesize {
+		chunkSize = int(cfs.filesize) - cfs.offset
+	}
+	data := cfs.client.GetFileChunk(cfs.filename, chunkSize, cfs.offset)
+	msgData := DataFileChunk{
+		Id:       cfs.id,
 		Filesize: cfs.filesize,
 		Offset:   cfs.offset,
 		Chunk:    data,
-	})
+	}
+	msg := NewMessage(MessageFileChunk, msgData)
 	cfs.offset += len(data)
 
 	cfs.client.Send(msg)
@@ -654,6 +664,7 @@ func (sfs *ServerFileState) sendFileMissing() {
 
 func (sfs *ServerFileState) sendRequestBinary() {
 	sfs.server.Send(NewMessage(MessageRequestBinary, &DataRequestBinary{
-		Id: sfs.id,
+		Id:        sfs.id,
+		ChunkSize: 1000,
 	}))
 }
