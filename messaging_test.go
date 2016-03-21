@@ -135,11 +135,11 @@ func (client *MockClient) GetDedupeHash(filename string) FileDedupeHash {
 	return FileDedupeHash{}
 }
 
-func (client *MockClient) GetFileChunk(filename string, size int, offset int) []byte {
+func (client *MockClient) GetFileChunk(filename string, size int64, offset int64) []byte {
 	chunk := make([]byte, size)
-	nameLen := len(filename)
+	nameLen := int64(len(filename))
 
-	for i := 0; i < size; i++ {
+	for i := int64(0); i < size; i++ {
 		chunk[i] = filename[(i+offset)%nameLen]
 	}
 

@@ -157,13 +157,13 @@ type DataDedupeHash struct {
 
 type DataRequestBinary struct {
 	Id        FileId
-	ChunkSize int
+	ChunkSize int64
 }
 
 type DataFileChunk struct {
 	Id       FileId
 	Filesize int64
-	Offset   int
+	Offset   int64
 	Chunk    []byte
 }
 
@@ -225,7 +225,7 @@ type ClientInterface interface {
 	Send(*Message)
 	GetFileInfo(string) PartialFileInfo
 	GetDedupeHash(string) FileDedupeHash
-	GetFileChunk(string, int, int) []byte
+	GetFileChunk(filename string, size int64, offset int64) []byte
 	Enumerate() <-chan string
 }
 
@@ -325,7 +325,7 @@ type ClientFileState struct {
 	state    ClientStateEnum
 	filename string
 	filesize int64
-	offset   int
+	offset   int64
 	modTime  time.Time
 }
 
@@ -411,9 +411,9 @@ func (cfs *ClientFileState) sendDedupeHash() {
 	}))
 }
 
-func (cfs *ClientFileState) sendFileChunk(chunkSize int) {
-	if int64(chunkSize+cfs.offset) > cfs.filesize {
-		chunkSize = int(cfs.filesize) - cfs.offset
+func (cfs *ClientFileState) sendFileChunk(chunkSize int64) {
+	if chunkSize+cfs.offset > cfs.filesize {
+		chunkSize = cfs.filesize - cfs.offset
 	}
 	data := cfs.client.GetFileChunk(cfs.filename, chunkSize, cfs.offset)
 	msgData := DataFileChunk{
@@ -423,7 +423,7 @@ func (cfs *ClientFileState) sendFileChunk(chunkSize int) {
 		Chunk:    data,
 	}
 	msg := NewMessage(MessageFileChunk, msgData)
-	cfs.offset += len(data)
+	cfs.offset += int64(len(data))
 
 	cfs.client.Send(msg)
 }
@@ -555,7 +555,7 @@ type ServerFileState struct {
 	filename   string
 	dedupeHash FileDedupeHash
 	filesize   int64
-	offset     int
+	offset     int64
 	network    NetworkInterface
 }
 
@@ -631,7 +631,7 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			dataChunk := DataFileChunk{}
 			msg.Decode(&dataChunk)
 			sfs.server.StoreBinary(sfs.filename, dataChunk.Chunk)
-			if dataChunk.Filesize == int64(dataChunk.Offset+len(dataChunk.Chunk)) {
+			if dataChunk.Filesize == dataChunk.Offset+int64(len(dataChunk.Chunk)) {
 				sfs.sendFileOK()
 				sfs.state = ServerStateEndBinary
 			} else {

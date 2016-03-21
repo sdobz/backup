@@ -14,27 +14,26 @@ type BackupServerConfig struct {
 
 type ServerConfig struct {
 	FilePath string `json:"file_path"`
-	DbPath   string `json:"db_path"`
 	Port     int    `json:"port"`
 }
 
 type Server struct {
 	config  ServerConfig
-	db      *DB
+	storage *Storage
 	network NetworkInterface
 }
 
 var _ ServerInterface = (*Server)(nil)
 
 func NewServer(config ServerConfig, network NetworkInterface) (server *Server, err error) {
-	db, err := NewDB(config.DbPath)
+	storage, err := NewStorage(config.FilePath)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Server{
 		config:  config,
-		db:      db,
+		storage: storage,
 		network: network,
 	}, nil
 }
@@ -54,15 +53,15 @@ func (server *Server) IsExpired(filename string) bool {
 }
 
 func (server *Server) GetVerification(id FileId) FileVerificationHash {
-	return server.db.getVerification(id)
+	return server.storage.GetVerification(id)
 }
 
 func (server *Server) HasDedupeHash(hash FileDedupeHash) bool {
-	return server.db.hasDedupeHash(hash)
+	return server.storage.HasDedupeHash(hash)
 }
 
 func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
-	return server.db.hasVerificationHash(hash)
+	return server.storage.HasVerificationHash(hash)
 }
 
 func (server *Server) StoreBinary(filename string, chunk []byte) {
@@ -110,7 +109,6 @@ func ServeBackup(config BackupServerConfig, network NetworkInterface) {
 	}
 
 	serverConfig.FilePath = expandTilde(serverConfig.FilePath)
-	serverConfig.DbPath = expandTilde(serverConfig.DbPath)
 
 	server, err := NewServer(serverConfig, network)
 	if err != nil {

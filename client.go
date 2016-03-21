@@ -44,6 +44,7 @@ type Client struct {
 	backupStats BackupStats
 	backupSpec  BackupSpec
 	network     NetworkInterface
+	fileHandles map[string]*os.File
 }
 
 // Verify Client implements ClientInterface
@@ -54,6 +55,7 @@ func NewClient(backupSpec BackupSpec, network NetworkInterface) *Client {
 		backupStats: BackupStats{},
 		backupSpec:  backupSpec,
 		network:     network,
+		fileHandles: make(map[string]*os.File),
 	}
 }
 
@@ -87,13 +89,20 @@ func (client *Client) GetDedupeHash(filename string) FileDedupeHash {
 	return hash
 }
 
-func (client *Client) GetFileChunk(filename string, size int, offset int) []byte {
-	// TODO: Track handles
-	file, err := os.Open(filename) // For read access.
-	if err != nil {
-		log.Fatal(err)
+func (client *Client) GetFileChunk(filename string, size int64, offset int64) []byte {
+	_, ok := client.fileHandles[filename]
+	if !ok {
+		file, err := os.Open(filename)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+		client.fileHandles[filename] = file
 	}
+
+	file := client.fileHandles[filename]
 	data := make([]byte, ChunkSize)
+	file.Seek(offset, 0)
 	count, err := file.Read(data)
 	if err != io.EOF && err != nil {
 		log.Fatal(err)
