@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io/ioutil"
 	"log"
 	"os"
@@ -26,6 +27,7 @@ func NewTempFileManager() *TempFileManager {
 }
 
 func (tfm *TempFileManager) CreateFile(filename string, size int64) {
+	// Creates a file with the given filename containing the filename repeated to the correct filesize
 	os.MkdirAll(path.Dir(filename), 0755)
 
 	chunk := make([]byte, size)
@@ -63,7 +65,102 @@ func TestClientGetsInfo(t *testing.T) {
 	}
 
 	diff := info.ModTime().Sub(time.Now()).Seconds()
-	if diff < -.5 || diff > .5 {
+	if diff < -2 || diff > 2 {
 		t.Fatal("Client modtime is too different")
 	}
+
+	tfm.Cleanup()
+}
+
+func TestSmallFileHasDeterministicDedupeHash(t *testing.T) {
+	filename := "file"
+	filesize := int64(128)
+	tfm := NewTempFileManager()
+	tfm.CreateFile(filename, filesize)
+
+	client := NewClient(BackupSpec{}, &ChannelNetwork{})
+	dedupe := client.GetDedupeHash(tfm.Prefix(filename))
+
+	// Gotten by running this function with an incorrect hash
+	expected := FileDedupeHash{128, 1, 109, 158, 23, 121, 104, 84, 243, 195, 166, 138, 179, 49, 134, 0}
+
+	if dedupe != expected {
+		t.Fatalf("Incorrect dedupe hash, got: %v", dedupe)
+	}
+
+	filename2 := "file2"
+	tfm.CreateFile(filename2, filesize)
+	dedupe = client.GetDedupeHash(tfm.Prefix(filename2))
+
+	if dedupe == expected {
+		t.Fatal("Expected file hash to change with different contents")
+	}
+
+	tfm.Cleanup()
+}
+
+func TestLargeFileHasDeterministicDedupeHash(t *testing.T) {
+	filename := "file"
+	// imohash changes strategies on files larger than 128k
+	filesize := int64(1000000)
+	tfm := NewTempFileManager()
+	tfm.CreateFile(filename, filesize)
+
+	client := NewClient(BackupSpec{}, &ChannelNetwork{})
+	dedupe := client.GetDedupeHash(tfm.Prefix(filename))
+
+	// Gotten by running this function with an incorrect hash
+	expected := FileDedupeHash{192, 132, 61, 22, 46, 84, 78, 89, 30, 218, 156, 68, 51, 194, 43, 15}
+
+	if dedupe != expected {
+		t.Fatalf("Incorrect dedupe hash, got: %v", dedupe)
+	}
+
+	filename2 := "file2"
+	tfm.CreateFile(filename2, filesize)
+	dedupe = client.GetDedupeHash(tfm.Prefix(filename2))
+
+	if dedupe == expected {
+		t.Fatal("Expected file hash to change with different contents")
+	}
+
+	tfm.Cleanup()
+}
+
+func TestFileChunkInFile(t *testing.T) {
+	filename := "file"
+	filesize := int64(100)
+	tfm := NewTempFileManager()
+	tfm.CreateFile(filename, filesize)
+
+	client := NewClient(BackupSpec{}, &ChannelNetwork{})
+	chunk := client.GetFileChunk(tfm.Prefix(filename), 10, 1)
+	expected := []byte{'i', 'l', 'e', 'f', 'i', 'l', 'e', 'f', 'i', 'l'}
+
+	if !bytes.Equal(chunk, expected) {
+		t.Fatalf("Got: %v expected: %v", chunk, expected)
+	}
+
+	// As a side effect this also tests that TempFileManager creates files properly
+
+	tfm.Cleanup()
+}
+
+func TestFileChunkReachesFileEnd(t *testing.T) {
+	filename := "file"
+	filesize := int64(100)
+	tfm := NewTempFileManager()
+	tfm.CreateFile(filename, filesize)
+
+	client := NewClient(BackupSpec{}, &ChannelNetwork{})
+	chunk := client.GetFileChunk(tfm.Prefix(filename), 10, 95)
+	expected := []byte{'e', 'f', 'i', 'l', 'e'}
+
+	if !bytes.Equal(chunk, expected) {
+		t.Fatalf("Got: %v expected: %v", chunk, expected)
+	}
+
+	// As a side effect this also tests that TempFileManager creates files properly
+
+	tfm.Cleanup()
 }

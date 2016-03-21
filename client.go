@@ -101,8 +101,8 @@ func (client *Client) GetFileChunk(filename string, size int64, offset int64) []
 	}
 
 	file := client.fileHandles[filename]
-	data := make([]byte, ChunkSize)
-	file.Seek(offset, 0)
+	data := make([]byte, size)
+	file.Seek(offset, os.SEEK_SET)
 	count, err := file.Read(data)
 	if err != io.EOF && err != nil {
 		log.Fatal(err)
