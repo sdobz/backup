@@ -19,7 +19,6 @@ type ClientConfig struct {
 
 type BackupGlob struct {
 	include  bool
-	abs      bool
 	root     string
 	origGlob string
 	glob     glob.Glob
@@ -174,6 +173,10 @@ func parseBackupSpec(specReader io.Reader) (spec BackupSpec, err error) {
 		line := scanner.Text()
 		line = strings.TrimSpace(line)
 		include := true
+
+		if len(line) == 0 {
+			continue
+		}
 
 		// # marks comment
 		if string(line[:1]) == "#" {

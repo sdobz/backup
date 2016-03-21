@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -163,4 +164,78 @@ func TestFileChunkReachesFileEnd(t *testing.T) {
 	// As a side effect this also tests that TempFileManager creates files properly
 
 	tfm.Cleanup()
+}
+
+func TestParseBackupSpec(t *testing.T) {
+	specString := `
+	# Commnts are ignored
+	filename
+	+ filename_plus
+	+    filename_plus_whitespace
+	filename_trailing_space
+	# - Marks not inclusion
+	- not_included
+	- /absolute/filename
+	/absolute/*/subdirs
+	/absolute/path/
+	`
+	globs, _ := parseBackupSpec(strings.NewReader(specString))
+
+	expected := BackupSpec{[]BackupGlob{
+		BackupGlob{
+			include:  true,
+			root:     "",
+			origGlob: "filename",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "",
+			origGlob: "filename_plus",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "",
+			origGlob: "filename_plus_whitespace",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "",
+			origGlob: "filename_trailing_space",
+		},
+		BackupGlob{
+			include:  false,
+			root:     "",
+			origGlob: "not_included",
+		},
+		BackupGlob{
+			include:  false,
+			root:     "/absolute/filename",
+			origGlob: "/absolute/filename",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "/absolute/",
+			origGlob: "/absolute/*/subdirs",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "/absolute/path/",
+			origGlob: "/absolute/path/**",
+		},
+	}}
+
+	if len(globs.globs) != len(expected.globs) {
+		t.Fatal("Produced wrong number of globs")
+	}
+
+	for i := 0; i < len(globs.globs); i++ {
+		actual := globs.globs[i]
+		// We aren't testing this
+		actual.glob = nil
+		expectedGlob := expected.globs[i]
+		if actual != expectedGlob {
+			t.Fail()
+			t.Logf("Expected %+v got %+v", expectedGlob, actual)
+		}
+	}
 }
