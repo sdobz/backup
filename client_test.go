@@ -178,6 +178,7 @@ func TestParseBackupSpec(t *testing.T) {
 	- /absolute/filename
 	/absolute/*/subdirs
 	/absolute/path/
+	relative/path/
 	`
 	globs, _ := parseBackupSpec(strings.NewReader(specString))
 
@@ -221,6 +222,11 @@ func TestParseBackupSpec(t *testing.T) {
 			include:  true,
 			root:     "/absolute/path/",
 			origGlob: "/absolute/path/**",
+		},
+		BackupGlob{
+			include:  true,
+			root:     "",
+			origGlob: "relative/path/**",
 		},
 	}}
 
