@@ -1,15 +1,13 @@
 package main
 
 import (
-	"bufio"
-	"github.com/gobwas/glob"
 	"github.com/kalafut/imohash"
+	"github.com/monochromegane/go-gitignore"
 	"io"
 	"log"
 	"os"
 	"os/user"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -17,31 +15,13 @@ type ClientConfig struct {
 	specFile string
 }
 
-type BackupGlob struct {
-	include  bool
-	root     string
-	origGlob string
-	glob     glob.Glob
-}
-
-type BackupSpec struct {
-	globs []BackupGlob
-}
-
-type BackupStats struct {
-	start        time.Time
-	end          time.Time
-	filesChecked uint64
-	globsChecked uint64
-}
-
-func (backupStats *BackupStats) duration() time.Duration {
-	return backupStats.end.Sub(backupStats.start)
+type Enumerator struct {
+	gitignore gitignore.IgnoreMatcher
+	root      string
 }
 
 type Client struct {
-	backupStats BackupStats
-	backupSpec  BackupSpec
+	enumerator  Enumerator
 	network     NetworkInterface
 	fileHandles map[string]*os.File
 }
@@ -49,10 +29,9 @@ type Client struct {
 // Verify Client implements ClientInterface
 var _ ClientInterface = (*Client)(nil)
 
-func NewClient(backupSpec BackupSpec, network NetworkInterface) *Client {
+func NewClient(enumerator Enumerator, network NetworkInterface) *Client {
 	return &Client{
-		backupStats: BackupStats{},
-		backupSpec:  backupSpec,
+		enumerator:  enumerator,
 		network:     network,
 		fileHandles: make(map[string]*os.File),
 	}
@@ -110,115 +89,32 @@ func (client *Client) GetFileChunk(filename string, size int64, offset int64) []
 	return data[:count]
 }
 
-func (client *Client) Enumerate() <-chan string {
-	client.backupStats.start = time.Now()
-
+func (e *Enumerator) Enumerate() <-chan string {
 	ch := make(chan string, 100)
 	// log.Print("Enumerate...")
 	go func() {
 		// For every glob
-		for _, glob := range client.backupSpec.globs {
-			if glob.include && glob.root != "" {
-				// log.Print("Walk: ", glob.root)
-				// Walk over any absolute included paths
-				filepath.Walk(glob.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
-					if err != nil {
-						return err
-					}
-
-					client.backupStats.filesChecked += 1
-
-					if info.IsDir() {
-						return nil
-					}
-
-					// log.Print("  Candidate: ", path)
-
-					// Check the matched path against all globs
-					include := false
-					for _, elimGlob := range client.backupSpec.globs {
-						// If it matches a glob then mark the file as included or excluded depending on the glob
-						// If the glob include matches the current include state then it cannot change the value
-						//   and does not need to be evaluated
-						if elimGlob.include != include {
-							// log.Print("  Checking against glob ", elimGlob.origGlob, " <- ", path)
-							if elimGlob.glob.Match(path) {
-								client.backupStats.globsChecked += 1
-								include = elimGlob.include
-								// log.Print("    Match! Include: ", include)
-							}
-						}
-					}
-					if include {
-						ch <- path
-					}
-					return nil
-				}))
+		filepath.Walk(e.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
 			}
-		}
+
+			if info.IsDir() {
+				return nil
+			}
+
+			if e.gitignore.Match(path, false) {
+				ch <- path
+			}
+			return nil
+		}))
 		close(ch)
-		client.backupStats.end = time.Now()
 	}()
 	return ch
 }
 
-func parseBackupSpec(specReader io.Reader) (spec BackupSpec, err error) {
-	scanner := bufio.NewScanner(specReader)
-	stringSep := string(os.PathSeparator)
-
-	for scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return spec, err
-		}
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
-		include := true
-
-		if len(line) == 0 {
-			continue
-		}
-
-		// # marks comment
-		if string(line[:1]) == "#" {
-			continue
-		}
-		// Nothing or + marks as inclusion
-		if string(line[:1]) == "+" {
-			line = line[1:]
-		}
-		// - marks as exclusion
-		if string(line[:1]) == "-" {
-			include = false
-			line = line[1:]
-		}
-
-		// Space is trimmed
-		line = strings.TrimSpace(line)
-		// ~/ is expanded
-		line = expandTilde(line)
-
-		root := ""
-		if filepath.IsAbs(line) {
-			// If there is a * in the path then everything to the left of it is considered the root and walks will start there
-			root = strings.SplitN(line, "*", 2)[0]
-		}
-
-		// If the path ends in / match everything under it
-		if line[len(line)-1:] == stringSep {
-			line = line + "**"
-		}
-
-		glob := BackupGlob{
-			include:  include,
-			root:     root,
-			glob:     glob.MustCompile(line, os.PathSeparator),
-			origGlob: line,
-		}
-
-		spec.globs = append(spec.globs, glob)
-	}
-
-	return spec, nil
+func (client *Client) Enumerate() <-chan string{
+	return client.enumerator.Enumerate()
 }
 
 func expandTilde(path string) string {
@@ -242,17 +138,15 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 
 	specFile = expandTilde(specFile)
 
-	file, err := os.Open(specFile)
+	gitignore, err := gitignore.NewGitIgnore(specFile)
 	if err != nil {
-		log.Panic(err)
+		log.Fatal(err)
 	}
 
-	backupSpec, err := parseBackupSpec(file)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	client := NewClient(backupSpec, network)
+	client := NewClient(Enumerator{
+		gitignore: gitignore,
+		root:      filepath.Dir(specFile),
+	}, network)
 	cs := NewClientState(client)
 	cs.requestSession()
 
@@ -263,6 +157,4 @@ func PerformBackup(config ClientConfig, network NetworkInterface) {
 			cs.handleMessage(&msg)
 		}
 	}()
-
-	log.Print("Took: ", client.backupStats.duration().Seconds(), "s")
 }
