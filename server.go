@@ -88,27 +88,16 @@ func parseServerConfig(file []byte) (serverConfig ServerConfig, err error) {
 	return serverConfig, nil
 }
 
-func ServeBackup(config BackupServerConfig, network NetworkInterface) {
-	configFile := ""
-	if config.configFile == "" {
-		configFile = ".backup-server"
-	} else {
-		configFile = config.configFile
-	}
-
-	configFile = expandTilde(configFile)
-
-	file, err := ioutil.ReadFile(configFile)
+func ServeBackup(configFile string, network NetworkInterface) error {
+	file, err := os.Open(configFile)
 	if err != nil {
-		log.Panic(err)
+		return err
 	}
 
 	serverConfig, err := parseServerConfig(file)
 	if err != nil {
-		log.Panic(err)
+		return err
 	}
-
-	serverConfig.FilePath = expandTilde(serverConfig.FilePath)
 
 	server, err := NewServer(serverConfig, network)
 	if err != nil {

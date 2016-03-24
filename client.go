@@ -6,9 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/user"
 	"path/filepath"
 	"time"
+	"errors"
 )
 
 type ClientConfig struct {
@@ -20,6 +20,22 @@ type Enumerator struct {
 	root      string
 }
 
+func NewEnumerator(specFile string) (*Enumerator, error) {
+	if _, err := os.Open(specFile); os.IsNotExist(err) {
+		return nil, errors.New("Client config does not exist")
+	}
+
+	ignorer, err := gitignore.NewGitIgnore(specFile)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Enumerator{
+		gitignore: ignorer,
+		root: filepath.Dir(specFile),
+	}, nil
+}
+
 type Client struct {
 	enumerator  Enumerator
 	network     NetworkInterface
@@ -29,12 +45,17 @@ type Client struct {
 // Verify Client implements ClientInterface
 var _ ClientInterface = (*Client)(nil)
 
-func NewClient(enumerator Enumerator, network NetworkInterface) *Client {
+func NewClient(specFile string, network NetworkInterface) (*Client, error) {
+	enumerator, err := NewEnumerator(specFile)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Client{
 		enumerator:  enumerator,
 		network:     network,
 		fileHandles: make(map[string]*os.File),
-	}
+	}, nil
 }
 
 func (client *Client) Send(msg *Message) {
@@ -117,38 +138,18 @@ func (client *Client) Enumerate() <-chan string{
 	return client.enumerator.Enumerate()
 }
 
-func expandTilde(path string) string {
-	usr, _ := user.Current()
-
-	if path[:2] == "~/" {
-		path = usr.HomeDir + string(os.PathSeparator) + path[2:]
-	}
-
-	return path
-}
-
 // Tell server to start backup session, specifying a directory
-func PerformBackup(config ClientConfig, network NetworkInterface) {
-	specFile := ""
-	if config.specFile == "" {
-		specFile = "~/.backup"
-	} else {
-		specFile = config.specFile
-	}
-
-	specFile = expandTilde(specFile)
-
-	gitignore, err := gitignore.NewGitIgnore(specFile)
+func PerformBackup(specFile string, network NetworkInterface) error {
+	client, err := NewClient(specFile, network)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
-	client := NewClient(Enumerator{
-		gitignore: gitignore,
-		root:      filepath.Dir(specFile),
-	}, network)
 	cs := NewClientState(client)
-	cs.requestSession()
+
+	err = cs.requestSession()
+	if err != nil {
+		return err
+	}
 
 	go func() {
 		for {
