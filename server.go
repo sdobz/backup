@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -69,6 +70,7 @@ func (server *Server) StoreBinary(filename string, chunk []byte) {
 }
 
 func (server *Server) Send(msg *Message) {
+	log.Printf("Server sending: %v", msg)
 	server.network.send(msg)
 }
 
@@ -79,9 +81,13 @@ func (server *Server) NewSession() Session {
 // Get session start request
 // Form backup location, get storage object
 
-func parseServerConfig(file []byte) (serverConfig ServerConfig, err error) {
+func parseServerConfig(file io.Reader) (serverConfig ServerConfig, err error) {
 	serverConfig = ServerConfig{}
-	err = json.Unmarshal(file, &serverConfig)
+	contents, err := ioutil.ReadAll(file)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	err = json.Unmarshal(contents, &serverConfig)
 	if err != nil {
 		return ServerConfig{}, err
 	}
@@ -105,8 +111,17 @@ func ServeBackup(configFile string, network NetworkInterface) error {
 	}
 	serverState := NewServerState(server)
 
+	errc := make(chan error)
+
 	for {
 		msg := network.getMessage()
-		serverState.handleMessage(&msg)
+		go func() {
+			err := serverState.handleMessage(&msg)
+			if err != nil {
+				errc <- err
+			}
+		}()
 	}
+
+	return <-errc
 }

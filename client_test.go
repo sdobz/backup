@@ -57,7 +57,7 @@ func TestClientGetsInfo(t *testing.T) {
 	tfm := NewTempFileManager()
 	tfm.CreateFile(filename, filesize)
 
-	client, _ :=NewClient("", &ChannelNetwork{})
+	client, _ := NewClient("", &ChannelNetwork{})
 	info := client.GetFileInfo(tfm.Prefix(filename))
 
 	if info.Size() != filesize {
@@ -78,7 +78,7 @@ func TestSmallFileHasDeterministicDedupeHash(t *testing.T) {
 	tfm := NewTempFileManager()
 	tfm.CreateFile(filename, filesize)
 
-	client, _ :=NewClient("", &ChannelNetwork{})
+	client, _ := NewClient("", &ChannelNetwork{})
 	dedupe := client.GetDedupeHash(tfm.Prefix(filename))
 
 	// Gotten by running this function with an incorrect hash
@@ -106,7 +106,7 @@ func TestLargeFileHasDeterministicDedupeHash(t *testing.T) {
 	tfm := NewTempFileManager()
 	tfm.CreateFile(filename, filesize)
 
-	client, _ :=NewClient("", &ChannelNetwork{})
+	client, _ := NewClient("", &ChannelNetwork{})
 	dedupe := client.GetDedupeHash(tfm.Prefix(filename))
 
 	// Gotten by running this function with an incorrect hash
@@ -133,7 +133,7 @@ func TestFileChunkInFile(t *testing.T) {
 	tfm := NewTempFileManager()
 	tfm.CreateFile(filename, filesize)
 
-	client, _ :=NewClient("", &ChannelNetwork{})
+	client, _ := NewClient("", &ChannelNetwork{})
 	chunk := client.GetFileChunk(tfm.Prefix(filename), 10, 1)
 	expected := []byte{'i', 'l', 'e', 'f', 'i', 'l', 'e', 'f', 'i', 'l'}
 
@@ -164,4 +164,3 @@ func TestFileChunkReachesFileEnd(t *testing.T) {
 
 	tfm.Cleanup()
 }
-

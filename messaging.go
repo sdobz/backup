@@ -585,6 +585,7 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 				return err
 			}
 			if !sfs.server.HasFile(fileData.Filename) {
+				// TODO: return error from inside message to here
 				sfs.sendFileMissing()
 				sfs.state = ServerStateCheckingDedupeHash
 			} else if sfs.server.IsExpired(fileData.Filename) {

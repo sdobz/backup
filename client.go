@@ -1,26 +1,32 @@
 package main
 
 import (
+	"errors"
 	"github.com/kalafut/imohash"
 	"github.com/monochromegane/go-gitignore"
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
-	"errors"
 )
 
 type ClientConfig struct {
 	specFile string
 }
 
-type Enumerator struct {
-	gitignore gitignore.IgnoreMatcher
-	root      string
+type Client struct {
+	gitignore   gitignore.IgnoreMatcher
+	root        string
+	network     NetworkInterface
+	fileHandles map[string]*os.File
 }
 
-func NewEnumerator(specFile string) (*Enumerator, error) {
+// Verify Client implements ClientInterface
+var _ ClientInterface = (*Client)(nil)
+
+func NewClient(specFile string, network NetworkInterface) (*Client, error) {
 	if _, err := os.Open(specFile); os.IsNotExist(err) {
 		return nil, errors.New("Client config does not exist")
 	}
@@ -30,35 +36,16 @@ func NewEnumerator(specFile string) (*Enumerator, error) {
 		return nil, err
 	}
 
-	return &Enumerator{
-		gitignore: ignorer,
-		root: filepath.Dir(specFile),
-	}, nil
-}
-
-type Client struct {
-	enumerator  Enumerator
-	network     NetworkInterface
-	fileHandles map[string]*os.File
-}
-
-// Verify Client implements ClientInterface
-var _ ClientInterface = (*Client)(nil)
-
-func NewClient(specFile string, network NetworkInterface) (*Client, error) {
-	enumerator, err := NewEnumerator(specFile)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Client{
-		enumerator:  enumerator,
+		gitignore:   ignorer,
+		root:        path.Dir(specFile),
 		network:     network,
 		fileHandles: make(map[string]*os.File),
 	}, nil
 }
 
 func (client *Client) Send(msg *Message) {
+	log.Printf("Client sending: %v", msg)
 	client.network.send(msg)
 }
 
@@ -110,12 +97,12 @@ func (client *Client) GetFileChunk(filename string, size int64, offset int64) []
 	return data[:count]
 }
 
-func (e *Enumerator) Enumerate() <-chan string {
+func (client *Client) Enumerate() <-chan string {
 	ch := make(chan string, 100)
 	// log.Print("Enumerate...")
 	go func() {
 		// For every glob
-		filepath.Walk(e.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
+		filepath.Walk(client.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -124,7 +111,7 @@ func (e *Enumerator) Enumerate() <-chan string {
 				return nil
 			}
 
-			if e.gitignore.Match(path, false) {
+			if client.gitignore.Match(path, false) {
 				ch <- path
 			}
 			return nil
@@ -134,11 +121,6 @@ func (e *Enumerator) Enumerate() <-chan string {
 	return ch
 }
 
-func (client *Client) Enumerate() <-chan string{
-	return client.enumerator.Enumerate()
-}
-
-// Tell server to start backup session, specifying a directory
 func PerformBackup(specFile string, network NetworkInterface) error {
 	client, err := NewClient(specFile, network)
 	if err != nil {
@@ -151,11 +133,18 @@ func PerformBackup(specFile string, network NetworkInterface) error {
 		return err
 	}
 
-	go func() {
-		for {
-			msg := network.getMessage()
+	errc := make(chan error)
+
+	for {
+		msg := network.getMessage()
+		go func() {
 			log.Printf("Client got: %v", msg)
-			cs.handleMessage(&msg)
-		}
-	}()
+			err := cs.handleMessage(&msg)
+			if err != nil {
+				errc <- err
+			}
+		}()
+	}
+
+	return <-errc
 }

@@ -1,7 +1,5 @@
 package main
 
-import "log"
-
 type NetworkInterface interface {
 	getMessage() Message
 	send(*Message)
@@ -37,6 +35,5 @@ func (cn *ChannelNetwork) getMessage() Message {
 }
 
 func (cn *ChannelNetwork) send(msg *Message) {
-	log.Printf("Sending: %v", msg)
 	go func() { cn.sendChan <- *msg }()
 }

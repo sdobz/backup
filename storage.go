@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
+	"os"
 	"path"
 )
 
@@ -12,7 +13,11 @@ type Storage struct {
 }
 
 func NewStorage(base string) (storage *Storage, err error) {
-	db, err := sql.Open("sqlite3", path.Join(base, "meta.sqlite3"))
+	dbPath := path.Join(base, "meta.sqlite3")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -25,12 +30,21 @@ func NewStorage(base string) (storage *Storage, err error) {
 	return storage, nil
 }
 
+type pragmaInfo struct {
+	cid        int
+	name       []byte
+	_type      []byte
+	notnull    bool
+	dflt_value []byte
+	pk         int
+}
+
 func verifyDB(db *sql.DB) error {
 	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+	defer rows.Close()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	var tableName string
 	for rows.Next() {
@@ -44,6 +58,7 @@ func verifyDB(db *sql.DB) error {
 	}
 
 	rows, err = db.Query("pragma table_info('files')")
+	defer rows.Close()
 	expectedColumns := []string{
 		"filename",
 		"dedupe",
@@ -51,13 +66,18 @@ func verifyDB(db *sql.DB) error {
 		"modified",
 	}
 	i := 0
-	var columnName string
+	var info pragmaInfo
 	for rows.Next() {
-		err := rows.Scan(&columnName)
+		err := rows.Scan(&info.cid,
+			&info.name,
+			&info._type,
+			&info.notnull,
+			&info.dflt_value,
+			&info.pk)
 		if err != nil {
 			return err
 		}
-		if expectedColumns[i] != columnName {
+		if expectedColumns[i] != string(info.name) {
 			return errors.New("Schema did not match expected")
 		}
 		i++

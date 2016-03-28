@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"sync"
 )
 
 func main() {
@@ -30,13 +32,19 @@ func main() {
 			return
 		}
 
-		if *serverConfigFlag == "" {
-			fmt.Println("Please specify server configuration using -serverConfig")
-			return
-		}
-
 		clientNetwork, serverNetwork := NewChannelNetwork()
-		go ServeBackup(*serverConfigFlag, serverNetwork)
-		PerformBackup(*clientConfigFlag, clientNetwork)
+		wg := sync.WaitGroup{}
+
+		go func() {
+			wg.Add(1)
+			log.Printf(PerformBackup(*clientConfigFlag, clientNetwork).Error())
+			wg.Done()
+		}()
+		go func() {
+			wg.Add(1)
+			log.Print(ServeBackup(*serverConfigFlag, serverNetwork).Error())
+			wg.Done()
+		}()
+		wg.Wait()
 	}
 }
