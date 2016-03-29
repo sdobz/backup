@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/kalafut/imohash"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -23,7 +24,7 @@ func NewSession() Session {
 	return Session(b)
 }
 
-func (session Session) String() string { return string(session[:4]) }
+func (session Session) String() string { return hex.EncodeToString(session[:2]) }
 
 type FileId string // TODO: Fixed size bytes, host integration
 
@@ -90,7 +91,7 @@ type Message struct {
 }
 
 func (msg Message) String() string {
-	return fmt.Sprintf("M[%s] %v", msg.Session[:4], msg.Type)
+	return fmt.Sprintf("M[%s] %v", msg.Session, msg.Type)
 }
 
 func NewMessage(t MessageType, data interface{}) *Message {
@@ -102,6 +103,12 @@ func NewMessage(t MessageType, data interface{}) *Message {
 		msg.encode(data)
 	}
 
+	return msg
+}
+
+func NewSessionMessage(session Session, t MessageType, d interface{}) *Message {
+	msg := NewMessage(t, d)
+	msg.Session = session
 	return msg
 }
 
@@ -234,11 +241,12 @@ const ClientTokenSize = 32
 type ClientToken [ClientTokenSize]byte
 
 type ClientState struct {
-	client    ClientInterface
-	session   Session
-	state     ClientStateEnum
-	token     ClientToken
-	fileState map[FileId]*ClientFileState
+	client         ClientInterface
+	session        Session
+	state          ClientStateEnum
+	token          ClientToken
+	fileState      map[FileId]*ClientFileState
+	fileStateMutex sync.Mutex
 }
 
 func (cs *ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
@@ -295,7 +303,11 @@ func (cs *ClientState) handleFileMessage(msg *Message) error {
 		return err
 	}
 	fileId := fileIdData.Id
-	if cfs, ok := cs.fileState[fileId]; ok {
+	cs.fileStateMutex.Lock()
+	cfs, ok := cs.fileState[fileId]
+	cs.fileStateMutex.Unlock()
+
+	if ok {
 		err := cfs.handleMessage(msg)
 		if err != nil {
 			return err
@@ -313,14 +325,16 @@ func (cs *ClientState) sendRequestSession() {
 
 func (cs *ClientState) sendFiles() {
 	for filename := range cs.client.Enumerate() {
-		cfs := NewClientFileState(cs.client, filename)
+		cfs := NewClientFileState(cs, filename)
+		cs.fileStateMutex.Lock()
 		cs.fileState[cfs.id] = cfs
+		cs.fileStateMutex.Unlock()
 		cfs.startFile()
 	}
 }
 
 type ClientFileState struct {
-	client   ClientInterface
+	cs       *ClientState
 	id       FileId
 	state    ClientStateEnum
 	filename string
@@ -337,13 +351,13 @@ func (cfs *ClientFileState) String() string {
 	}
 }
 
-func NewClientFileState(client ClientInterface, filename string) *ClientFileState {
+func NewClientFileState(cs *ClientState, filename string) *ClientFileState {
 	// Assert file exists
 
-	fileInfo := client.GetFileInfo(filename)
+	fileInfo := cs.client.GetFileInfo(filename)
 
 	cfs := &ClientFileState{
-		client:   client,
+		cs:       cs,
 		id:       NewFileId(filename),
 		state:    ClientStateInit,
 		filename: filename,
@@ -397,7 +411,7 @@ func (cfs *ClientFileState) handleMessage(msg *Message) error {
 }
 
 func (cfs *ClientFileState) sendStartFile() {
-	cfs.client.Send(NewMessage(MessageStartFile, &DataStartFile{
+	cfs.cs.client.Send(NewSessionMessage(cfs.cs.session, MessageStartFile, &DataStartFile{
 		Id:       cfs.id,
 		Filename: cfs.filename,
 		Modified: cfs.modTime,
@@ -405,9 +419,9 @@ func (cfs *ClientFileState) sendStartFile() {
 }
 
 func (cfs *ClientFileState) sendDedupeHash() {
-	cfs.client.Send(NewMessage(MessageDedupeHash, &DataDedupeHash{
+	cfs.cs.client.Send(NewSessionMessage(cfs.cs.session, MessageDedupeHash, &DataDedupeHash{
 		Id:   cfs.id,
-		Hash: cfs.client.GetDedupeHash(cfs.filename),
+		Hash: cfs.cs.client.GetDedupeHash(cfs.filename),
 	}))
 }
 
@@ -415,17 +429,17 @@ func (cfs *ClientFileState) sendFileChunk(chunkSize int64) {
 	if chunkSize+cfs.offset > cfs.filesize {
 		chunkSize = cfs.filesize - cfs.offset
 	}
-	data := cfs.client.GetFileChunk(cfs.filename, chunkSize, cfs.offset)
+	data := cfs.cs.client.GetFileChunk(cfs.filename, chunkSize, cfs.offset)
 	msgData := DataFileChunk{
 		Id:       cfs.id,
 		Filesize: cfs.filesize,
 		Offset:   cfs.offset,
 		Chunk:    data,
 	}
-	msg := NewMessage(MessageFileChunk, msgData)
+	msg := NewSessionMessage(cfs.cs.session, MessageFileChunk, msgData)
 	cfs.offset += int64(len(data))
 
-	cfs.client.Send(msg)
+	cfs.cs.client.Send(msg)
 }
 
 // Server state
@@ -470,8 +484,9 @@ func (state ServerStateEnum) String() string {
 }
 
 type ServerState struct {
-	server    ServerInterface
-	fileState map[Session]map[FileId]ServerFileState
+	server         ServerInterface
+	fileState      map[Session]map[FileId]ServerFileState
+	fileStateMutex sync.Mutex
 }
 
 func NewServerState(server ServerInterface) *ServerState {
@@ -507,7 +522,9 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 			log.Fatal("ServerFileState and message id disagree")
 		}
 
+		ss.fileStateMutex.Lock()
 		ss.fileState[msg.Session][sfs.id] = *sfs
+		ss.fileStateMutex.Unlock()
 	}
 
 	if msg.Type == MessageStartFile ||
@@ -534,7 +551,9 @@ func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
 	// Known valid session, not known valid id
 	idData := DataFileId{}
 	msg.Decode(&idData)
+	ss.fileStateMutex.Lock()
 	sfs, ok := ss.fileState[msg.Session][idData.Id]
+	ss.fileStateMutex.Unlock()
 	if !ok {
 		return errors.New("Dispatching message to nonexistant id")
 	}

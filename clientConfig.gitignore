@@ -1,2 +1,2 @@
-.env
-serverStorage/
+server_storage/*
+.git/*

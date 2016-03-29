@@ -28,20 +28,24 @@ func main() {
 
 	if runCommand.Parsed() {
 		if *clientConfigFlag == "" {
-			fmt.Println("Please specify client configuration using -clientConfig")
+			log.Print("Please specify client configuration using -clientConfig")
 			return
 		}
+		if *serverConfigFlag == "" {
+			log.Print("Please specify server configuration using -serverConfig")
+			return
+		}
+		log.Print("Running backup")
 
 		clientNetwork, serverNetwork := NewChannelNetwork()
 		wg := sync.WaitGroup{}
+		wg.Add(2)
 
 		go func() {
-			wg.Add(1)
-			log.Printf(PerformBackup(*clientConfigFlag, clientNetwork).Error())
+			log.Print(PerformBackup(*clientConfigFlag, clientNetwork).Error())
 			wg.Done()
 		}()
 		go func() {
-			wg.Add(1)
 			log.Print(ServeBackup(*serverConfigFlag, serverNetwork).Error())
 			wg.Done()
 		}()

@@ -95,6 +95,8 @@ func parseServerConfig(file io.Reader) (serverConfig ServerConfig, err error) {
 }
 
 func ServeBackup(configFile string, network NetworkInterface) error {
+	// TODO: configFile -> reader
+	log.Printf("Serving with %v", configFile)
 	file, err := os.Open(configFile)
 	if err != nil {
 		return err
@@ -107,7 +109,7 @@ func ServeBackup(configFile string, network NetworkInterface) error {
 
 	server, err := NewServer(serverConfig, network)
 	if err != nil {
-		log.Panic(err)
+		return err
 	}
 	serverState := NewServerState(server)
 
@@ -116,6 +118,7 @@ func ServeBackup(configFile string, network NetworkInterface) error {
 	for {
 		msg := network.getMessage()
 		go func() {
+			log.Printf("Server got %v", msg)
 			err := serverState.handleMessage(&msg)
 			if err != nil {
 				errc <- err

@@ -154,7 +154,7 @@ func (client *MockClient) InitializeFile(filename string, fileInfo MockFileInfo,
 }
 
 func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
-	cfs := NewClientFileState(cs.client, filename)
+	cfs := NewClientFileState(cs, filename)
 	cfs.state = state
 	cs.fileState[cfs.id] = cfs
 }
@@ -254,13 +254,6 @@ func (ss *ServerState) InitializeFile(filename string, session Session, state Se
 	sfs := NewServerFileState(ss.server, filename)
 	sfs.state = state
 	ss.fileState[session][sfs.id] = *sfs
-}
-
-// Test helpers
-func NewSessionMessage(session Session, t MessageType, d interface{}) *Message {
-	msg := NewMessage(t, d)
-	msg.Session = session
-	return msg
 }
 
 // Test all side effects
