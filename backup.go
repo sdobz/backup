@@ -38,15 +38,21 @@ func main() {
 		log.Print("Running backup")
 
 		clientNetwork, serverNetwork := NewChannelNetwork()
+		clientErrc := PerformBackup(*clientConfigFlag, clientNetwork)
+		serverErrc := ServeBackup(*serverConfigFlag, serverNetwork)
+
 		wg := sync.WaitGroup{}
 		wg.Add(2)
-
 		go func() {
-			log.Print(PerformBackup(*clientConfigFlag, clientNetwork).Error())
+			for err := range serverErrc {
+				log.Printf("Server error: %v", err.Error())
+			}
 			wg.Done()
 		}()
 		go func() {
-			log.Print(ServeBackup(*serverConfigFlag, serverNetwork).Error())
+			for err := range clientErrc {
+				log.Printf("Client error: %v", err.Error())
+			}
 			wg.Done()
 		}()
 		wg.Wait()

@@ -9,7 +9,8 @@ import (
 )
 
 type Storage struct {
-	db *sql.DB
+	db   *sql.DB
+	base string
 }
 
 func NewStorage(base string) (storage *Storage, err error) {
@@ -25,7 +26,10 @@ func NewStorage(base string) (storage *Storage, err error) {
 	if err := verifyDB(db); err != nil {
 		return nil, err
 	}
-	storage = &Storage{db}
+	storage = &Storage{
+		db:   db,
+		base: base,
+	}
 
 	return storage, nil
 }
@@ -83,6 +87,20 @@ func verifyDB(db *sql.DB) error {
 		i++
 	}
 	return nil
+}
+
+func (s *Storage) StoreBinary(filename string, chunk []byte) {
+	os.MkdirAll(path.Dir(path.Join(s.base, filename)), 0700)
+	f, err := os.OpenFile(path.Join(s.base, filename), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		panic(err)
+	}
+
+	defer f.Close()
+
+	if _, err = f.Write(chunk); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Storage) GetVerification(id FileId) FileVerificationHash {

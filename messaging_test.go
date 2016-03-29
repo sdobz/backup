@@ -253,7 +253,7 @@ func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo,
 func (ss *ServerState) InitializeFile(filename string, session Session, state ServerStateEnum) {
 	sfs := NewServerFileState(ss.server, filename)
 	sfs.state = state
-	ss.fileState[session][sfs.id] = *sfs
+	ss.fileState[session][sfs.id] = sfs
 }
 
 // Test all side effects

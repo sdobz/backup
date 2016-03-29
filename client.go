@@ -117,11 +117,13 @@ func (client *Client) Enumerate() <-chan string {
 	return ch
 }
 
-func PerformBackup(specFile string, network NetworkInterface) error {
-	log.Printf("Client performing backup using %v", specFile)
+func PerformBackup(specFile string, network NetworkInterface) <-chan error {
+	errc := make(chan error)
+
 	file, err := os.Open(specFile)
 	if err != nil {
-		return err
+		errc <- err
+		defer close(errc)
 	}
 
 	specBytes, err := ioutil.ReadAll(file)
@@ -132,21 +134,23 @@ func PerformBackup(specFile string, network NetworkInterface) error {
 
 	err = cs.requestSession()
 	if err != nil {
-		return err
+		errc <- err
+		defer close(errc)
 	}
 
-	errc := make(chan error)
+	go func() {
+		// if handleMessage async updates to Done then this will never terminate
+		for cs.state != ClientStateDone {
+			msg := network.getMessage()
+			go func() {
+				err := cs.handleMessage(&msg)
+				if err != nil {
+					errc <- err
+				}
+			}()
+		}
+		close(errc)
+	}()
 
-	for {
-		msg := network.getMessage()
-		go func() {
-			log.Printf("Client got: %v", msg)
-			err := cs.handleMessage(&msg)
-			if err != nil {
-				errc <- err
-			}
-		}()
-	}
-
-	return <-errc
+	return errc
 }

@@ -66,6 +66,7 @@ func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
 }
 
 func (server *Server) StoreBinary(filename string, chunk []byte) {
+	server.storage.StoreBinary(filename, chunk)
 	log.Printf("Got %v bytes", len(chunk))
 }
 
@@ -94,37 +95,42 @@ func parseServerConfig(file io.Reader) (serverConfig ServerConfig, err error) {
 	return serverConfig, nil
 }
 
-func ServeBackup(configFile string, network NetworkInterface) error {
-	// TODO: configFile -> reader
+func ServeBackup(configFile string, network NetworkInterface) <-chan error {
+	errc := make(chan error)
+
 	log.Printf("Serving with %v", configFile)
 	file, err := os.Open(configFile)
 	if err != nil {
-		return err
+		errc <- err
+		defer close(errc)
 	}
 
 	serverConfig, err := parseServerConfig(file)
 	if err != nil {
-		return err
+		errc <- err
+		defer close(errc)
 	}
 
 	server, err := NewServer(serverConfig, network)
 	if err != nil {
-		return err
+		errc <- err
+		defer close(errc)
 	}
-	serverState := NewServerState(server)
+	ss := NewServerState(server)
 
-	errc := make(chan error)
+	go func() {
+		// Never terminates
+		for {
+			msg := network.getMessage()
+			go func() {
+				err := ss.handleMessage(&msg)
+				if err != nil {
+					errc <- err
+				}
+			}()
+		}
+		close(errc)
+	}()
 
-	for {
-		msg := network.getMessage()
-		go func() {
-			log.Printf("Server got %v", msg)
-			err := serverState.handleMessage(&msg)
-			if err != nil {
-				errc <- err
-			}
-		}()
-	}
-
-	return <-errc
+	return errc
 }

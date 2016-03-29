@@ -249,7 +249,7 @@ type ClientState struct {
 	fileStateMutex sync.Mutex
 }
 
-func (cs *ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
+func (cs ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
 
 func NewClientState(client ClientInterface) *ClientState {
 	cs := &ClientState{
@@ -267,8 +267,8 @@ func (cs *ClientState) requestSession() error {
 	if cs.state != ClientStateInit {
 		return errors.New("Requesting session when not init")
 	}
-	cs.sendRequestSession()
 	cs.state = ClientStateGettingSession
+	cs.sendRequestSession()
 	return nil
 }
 
@@ -293,7 +293,7 @@ func (cs *ClientState) handleMessage(msg *Message) error {
 			return cs.handleFileMessage(msg)
 		}
 	}
-	return errors.New("Unhandled Client State")
+	return errors.New(fmt.Sprintf("CS unhandled message: %v", msg))
 }
 
 func (cs *ClientState) handleFileMessage(msg *Message) error {
@@ -308,10 +308,16 @@ func (cs *ClientState) handleFileMessage(msg *Message) error {
 	cs.fileStateMutex.Unlock()
 
 	if ok {
+		preState := cfs.state
 		err := cfs.handleMessage(msg)
 		if err != nil {
 			return err
 		}
+
+		if preState != cfs.state {
+			log.Printf("%v transitioned from %v", cfs, preState)
+		}
+
 		return nil
 	}
 	return errors.New("FileId not found")
@@ -343,7 +349,7 @@ type ClientFileState struct {
 	modTime  time.Time
 }
 
-func (cfs *ClientFileState) String() string {
+func (cfs ClientFileState) String() string {
 	if cfs.state != ClientStateSendingBinary {
 		return fmt.Sprintf("CF[%v] %v", cfs.id, cfs.state)
 	} else {
@@ -370,8 +376,8 @@ func NewClientFileState(cs *ClientState, filename string) *ClientFileState {
 }
 
 func (cfs *ClientFileState) startFile() {
-	cfs.sendStartFile()
 	cfs.state = ClientStateCheckingStatus
+	cfs.sendStartFile()
 }
 
 func (cfs *ClientFileState) handleMessage(msg *Message) error {
@@ -407,7 +413,7 @@ func (cfs *ClientFileState) handleMessage(msg *Message) error {
 			return nil
 		}
 	}
-	return errors.New("Unhandled message")
+	return errors.New(fmt.Sprintf("CFS unhandled message: %v", msg))
 }
 
 func (cfs *ClientFileState) sendStartFile() {
@@ -485,14 +491,14 @@ func (state ServerStateEnum) String() string {
 
 type ServerState struct {
 	server         ServerInterface
-	fileState      map[Session]map[FileId]ServerFileState
+	fileState      map[Session]map[FileId]*ServerFileState
 	fileStateMutex sync.Mutex
 }
 
 func NewServerState(server ServerInterface) *ServerState {
 	ss := &ServerState{
 		server:    server,
-		fileState: make(map[Session]map[FileId]ServerFileState),
+		fileState: make(map[Session]map[FileId]*ServerFileState),
 	}
 
 	return ss
@@ -523,7 +529,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 		}
 
 		ss.fileStateMutex.Lock()
-		ss.fileState[msg.Session][sfs.id] = *sfs
+		ss.fileState[msg.Session][sfs.id] = sfs
 		ss.fileStateMutex.Unlock()
 	}
 
@@ -533,12 +539,12 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 		msg.Type == MessageFileChunk {
 		return ss.dispatchMessageToFileState(msg)
 	}
-	return errors.New("Unhandled server message")
+	return errors.New(fmt.Sprintf("SS unhandled message: %v", msg))
 }
 
 func (ss *ServerState) initSession() Session {
 	session := ss.server.NewSession()
-	ss.fileState[session] = make(map[FileId]ServerFileState)
+	ss.fileState[session] = make(map[FileId]*ServerFileState)
 	return session
 }
 
@@ -557,7 +563,12 @@ func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
 	if !ok {
 		return errors.New("Dispatching message to nonexistant id")
 	}
-	return sfs.handleMessage(msg)
+	preState := sfs.state
+	err := sfs.handleMessage(msg)
+	if sfs.state != preState {
+		log.Printf("%v transitioned from %v", sfs, preState)
+	}
+	return err
 }
 
 func (ss *ServerState) sendSession(token ClientToken, session Session) {
@@ -578,11 +589,11 @@ type ServerFileState struct {
 	network    NetworkInterface
 }
 
-func (sfs *ServerFileState) String() string {
+func (sfs ServerFileState) String() string {
 	if sfs.state != ServerStateGettingBinary {
-		return fmt.Sprintf("S[%v] %v", sfs.id, sfs.state)
+		return fmt.Sprintf("SF[%v] %v", sfs.id, sfs.state)
 	} else {
-		return fmt.Sprintf("S[%v] %v %v/%v", sfs.id, sfs.state, sfs.offset, sfs.filesize)
+		return fmt.Sprintf("SF[%v] %v %v/%v", sfs.id, sfs.state, sfs.offset, sfs.filesize)
 	}
 }
 
@@ -605,14 +616,14 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			}
 			if !sfs.server.HasFile(fileData.Filename) {
 				// TODO: return error from inside message to here
-				sfs.sendFileMissing()
 				sfs.state = ServerStateCheckingDedupeHash
+				sfs.sendFileMissing()
 			} else if sfs.server.IsExpired(fileData.Filename) {
-				sfs.sendFileVerification()
 				sfs.state = ServerStateCheckingVerificationHash
+				sfs.sendFileVerification()
 			} else {
-				sfs.sendFileOK()
 				sfs.state = ServerStateEndLink
+				sfs.sendFileOK()
 			}
 			return nil
 		}
@@ -623,11 +634,11 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 				return err
 			}
 			if sfs.server.HasDedupeHash(dedupeData.Hash) {
-				sfs.sendFileOK()
 				sfs.state = ServerStateEndLink
+				sfs.sendFileOK()
 			} else {
-				sfs.sendRequestBinary()
 				sfs.state = ServerStateGettingBinary
+				sfs.sendRequestBinary()
 			}
 			return nil
 		}
@@ -638,11 +649,11 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 				return err
 			}
 			if sfs.server.HasVerificationHash(verificationData.Hash) {
-				sfs.sendFileOK()
 				sfs.state = ServerStateEndLink
+				sfs.sendFileOK()
 			} else {
-				sfs.sendRequestBinary()
 				sfs.state = ServerStateGettingBinary
+				sfs.sendRequestBinary()
 			}
 			return nil
 		}
@@ -652,15 +663,15 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			msg.Decode(&dataChunk)
 			sfs.server.StoreBinary(sfs.filename, dataChunk.Chunk)
 			if dataChunk.Filesize == dataChunk.Offset+int64(len(dataChunk.Chunk)) {
-				sfs.sendFileOK()
 				sfs.state = ServerStateEndBinary
+				sfs.sendFileOK()
 			} else {
 				sfs.sendRequestBinary()
 			}
 			return nil
 		}
 	}
-	return errors.New("Unhandled message")
+	return errors.New(fmt.Sprintf("%v unhandled message: %v", sfs, msg))
 }
 
 func (sfs *ServerFileState) sendFileOK() {
