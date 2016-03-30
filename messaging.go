@@ -451,6 +451,7 @@ type ServerInterface interface {
 	HasDedupeHash(FileDedupeHash) bool
 	HasVerificationHash(FileVerificationHash) bool
 	StoreBinary(string, []byte)
+	SetSessionInfo(Fingerprint, string)
 }
 
 const (
@@ -482,8 +483,6 @@ func (state ServerStateEnum) String() string {
 
 type ServerState struct {
 	server         ServerInterface
-	name           string
-	fingerprint    Fingerprint
 	fileState      map[FileId]*ServerFileState
 	fileStateMutex sync.Mutex
 }
@@ -501,11 +500,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	if msg.Type == MessageRequestSession {
 		dataRequestSession := DataRequestSession{}
 		msg.Decode(&dataRequestSession)
-		ss.name = dataRequestSession.BackupName
-		if len(ss.name) == 0 {
-			return errors.New("Zero length backup name")
-		}
-		ss.fingerprint = dataRequestSession.Fingerprint
+		ss.server.SetSessionInfo(dataRequestSession.Fingerprint, dataRequestSession.BackupName)
 		// TODO: Err on invalid fingerprint
 		ss.sendSession(dataRequestSession.Token)
 		return nil

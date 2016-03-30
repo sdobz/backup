@@ -19,9 +19,11 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	config  ServerConfig
-	storage *Storage
-	network NetworkInterface
+	config      ServerConfig
+	fingerprint Fingerprint
+	name        string
+	storage     *Storage
+	network     NetworkInterface
 }
 
 var _ ServerInterface = (*Server)(nil)
@@ -65,8 +67,13 @@ func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
 	return server.storage.HasVerificationHash(hash)
 }
 
+func (server *Server) SetSessionInfo(fingerprint Fingerprint, backupName string) {
+	server.fingerprint = fingerprint
+	server.name = backupName
+}
+
 func (server *Server) StoreBinary(filename string, chunk []byte) {
-	server.storage.StoreBinary(filename, chunk)
+	server.storage.StoreBinary(server.fingerprint, server.name, filename, chunk)
 	log.Printf("Got %v bytes", len(chunk))
 }
 

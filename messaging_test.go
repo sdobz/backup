@@ -167,6 +167,8 @@ func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
 type MockServer struct {
 	messages      []*Message
 	files         []string
+	name          string
+	fingerprint   Fingerprint
 	dedupeStore   map[FileDedupeHash]struct{}
 	fileInfoStore map[string]MockFileInfo
 	storedFiles   map[string][]byte
@@ -241,6 +243,11 @@ func (server *MockServer) StoreBinary(filename string, chunk []byte) {
 	server.storedFiles[filename] = append(server.storedFiles[filename], chunk...)
 }
 
+func (server *MockServer) SetSessionInfo(fingerprint Fingerprint, backupName string) {
+	server.fingerprint = fingerprint
+	server.name = backupName
+}
+
 // Test helper
 func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo, dedupe FileDedupeHash) {
 	server.files = append(server.files, filename)
@@ -303,11 +310,11 @@ func TestServerRespondsWithSession(t *testing.T) {
 		}),
 	})
 
-	if serverState.name != name {
-		t.Fatal("serverState has invalid name")
+	if server.name != name {
+		t.Fatal("server did not capture name")
 	}
-	if serverState.fingerprint != fingerprint {
-		t.Fatal("serverState did not capture fingerprint")
+	if server.fingerprint != fingerprint {
+		t.Fatal("server did not capture fingerprint")
 	}
 }
 

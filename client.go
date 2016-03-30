@@ -76,31 +76,16 @@ func (client *Client) GetDedupeHash(filename string) FileDedupeHash {
 }
 
 func (client *Client) GetFileChunk(filename string, size int64, offset int64) []byte {
-	// TODO: Use storage to abstract (+test)
-	_, ok := client.fileHandles[filename]
-	if !ok {
-		file, err := os.Open(filename)
-
-		if err != nil {
-			log.Print(err)
-		}
-		client.fileHandles[filename] = file
-	}
-
-	file := client.fileHandles[filename]
 	data := make([]byte, size)
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
 	file.Seek(offset, os.SEEK_SET)
 	count, err := file.Read(data)
-	if err == io.EOF {
-		defer func() {
-			// TODO: test close is called
-			client.fileHandles[filename].Close()
-			delete(client.fileHandles, filename)
-		}()
-	}
 	if err != io.EOF && err != nil {
 		// TODO: error handling
-		log.Print(err)
+		log.Fatal(err)
 	}
 
 	return data[:count]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
 	"os"
@@ -89,9 +90,12 @@ func verifyDB(db *sql.DB) error {
 	return nil
 }
 
-func (s *Storage) StoreBinary(filename string, chunk []byte) {
-	os.MkdirAll(path.Dir(path.Join(s.base, filename)), 0700)
-	f, err := os.OpenFile(path.Join(s.base, filename), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+func (s *Storage) StoreBinary(fingerprint Fingerprint, name string, filename string, chunk []byte) {
+	// TODO: maintain mode
+	fileBase := path.Join(s.base, name, hex.EncodeToString(fingerprint[:4]))
+
+	os.MkdirAll(path.Join(fileBase, path.Dir(filename)), 0700)
+	f, err := os.OpenFile(path.Join(fileBase, filename), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		panic(err)
 	}
