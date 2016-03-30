@@ -14,18 +14,6 @@ import (
 	"time"
 )
 
-const SessionSize = 32
-
-type Session [SessionSize]byte
-
-func NewSession() Session {
-	b := [SessionSize]byte{}
-	copy(b[:], NewRandomBytes(SessionSize))
-	return Session(b)
-}
-
-func (session Session) String() string { return hex.EncodeToString(session[:2]) }
-
 type FileId string // TODO: Fixed size bytes, host integration
 
 func (id FileId) String() string { return string(id[:4]) }
@@ -41,6 +29,10 @@ type FileDedupeHash [imohash.Size]byte
 const VerificationHashSize = 32
 
 type FileVerificationHash [VerificationHashSize]byte
+
+const FingerprintSize = 32
+
+type Fingerprint [FingerprintSize]byte
 
 // Message information
 type MessageType int
@@ -85,13 +77,12 @@ func (mt MessageType) String() string {
 }
 
 type Message struct {
-	Session Session
-	Type    MessageType
-	d       []byte
+	Type MessageType
+	d    []byte
 }
 
 func (msg Message) String() string {
-	return fmt.Sprintf("M[%s] %v", msg.Session, msg.Type)
+	return fmt.Sprintf("M %v", msg.Type)
 }
 
 func NewMessage(t MessageType, data interface{}) *Message {
@@ -103,12 +94,6 @@ func NewMessage(t MessageType, data interface{}) *Message {
 		msg.encode(data)
 	}
 
-	return msg
-}
-
-func NewSessionMessage(session Session, t MessageType, d interface{}) *Message {
-	msg := NewMessage(t, d)
-	msg.Session = session
 	return msg
 }
 
@@ -126,12 +111,13 @@ func (msg *Message) Decode(data interface{}) error {
 }
 
 type DataRequestSession struct {
-	Token ClientToken
+	Token       ClientToken
+	BackupName  string
+	Fingerprint Fingerprint
 }
 
 type DataSession struct {
-	Token   ClientToken
-	Session Session
+	Token ClientToken
 }
 
 type DataFileId struct {
@@ -222,6 +208,7 @@ func NewRandomBytes(size int) []byte {
 }
 
 func NewClientToken() ClientToken {
+	// TODO: Sign token
 	b := [ClientTokenSize]byte{}
 	copy(b[:], NewRandomBytes(ClientTokenSize))
 	return ClientToken(b)
@@ -234,6 +221,8 @@ type ClientInterface interface {
 	GetDedupeHash(string) FileDedupeHash
 	GetFileChunk(filename string, size int64, offset int64) []byte
 	Enumerate() <-chan string
+	GetName() string
+	GetFingerprint() (Fingerprint, error)
 }
 
 const ClientTokenSize = 32
@@ -242,18 +231,16 @@ type ClientToken [ClientTokenSize]byte
 
 type ClientState struct {
 	client         ClientInterface
-	session        Session
 	state          ClientStateEnum
 	token          ClientToken
 	fileState      map[FileId]*ClientFileState
 	fileStateMutex sync.Mutex
 }
 
-func (cs ClientState) String() string { return fmt.Sprintf("C[%v] %v", cs.session, cs.state) }
+func (cs ClientState) String() string { return fmt.Sprintf("C %v", cs.state) }
 
 func NewClientState(client ClientInterface) *ClientState {
 	cs := &ClientState{
-		// no session
 		client:    client,
 		state:     ClientStateInit,
 		token:     NewClientToken(),
@@ -268,8 +255,7 @@ func (cs *ClientState) requestSession() error {
 		return errors.New("Requesting session when not init")
 	}
 	cs.state = ClientStateGettingSession
-	cs.sendRequestSession()
-	return nil
+	return cs.sendRequestSession()
 }
 
 func (cs *ClientState) handleMessage(msg *Message) error {
@@ -280,7 +266,6 @@ func (cs *ClientState) handleMessage(msg *Message) error {
 			if sessionData.Token != cs.token {
 				return errors.New("Recieved invalid token")
 			}
-			cs.session = sessionData.Session
 			cs.state = ClientStateCheckingFiles
 			cs.sendFiles()
 			return nil
@@ -323,10 +308,17 @@ func (cs *ClientState) handleFileMessage(msg *Message) error {
 	return errors.New("FileId not found")
 }
 
-func (cs *ClientState) sendRequestSession() {
+func (cs *ClientState) sendRequestSession() error {
+	fingerprint, err := cs.client.GetFingerprint()
+	if err != nil {
+		return err
+	}
 	cs.client.Send(NewMessage(MessageRequestSession, &DataRequestSession{
-		Token: cs.token,
+		Token:       cs.token,
+		BackupName:  cs.client.GetName(),
+		Fingerprint: fingerprint,
 	}))
+	return nil
 }
 
 func (cs *ClientState) sendFiles() {
@@ -417,7 +409,7 @@ func (cfs *ClientFileState) handleMessage(msg *Message) error {
 }
 
 func (cfs *ClientFileState) sendStartFile() {
-	cfs.cs.client.Send(NewSessionMessage(cfs.cs.session, MessageStartFile, &DataStartFile{
+	cfs.cs.client.Send(NewMessage(MessageStartFile, &DataStartFile{
 		Id:       cfs.id,
 		Filename: cfs.filename,
 		Modified: cfs.modTime,
@@ -425,7 +417,7 @@ func (cfs *ClientFileState) sendStartFile() {
 }
 
 func (cfs *ClientFileState) sendDedupeHash() {
-	cfs.cs.client.Send(NewSessionMessage(cfs.cs.session, MessageDedupeHash, &DataDedupeHash{
+	cfs.cs.client.Send(NewMessage(MessageDedupeHash, &DataDedupeHash{
 		Id:   cfs.id,
 		Hash: cfs.cs.client.GetDedupeHash(cfs.filename),
 	}))
@@ -442,7 +434,7 @@ func (cfs *ClientFileState) sendFileChunk(chunkSize int64) {
 		Offset:   cfs.offset,
 		Chunk:    data,
 	}
-	msg := NewSessionMessage(cfs.cs.session, MessageFileChunk, msgData)
+	msg := NewMessage(MessageFileChunk, msgData)
 	cfs.offset += int64(len(data))
 
 	cfs.cs.client.Send(msg)
@@ -459,7 +451,6 @@ type ServerInterface interface {
 	HasDedupeHash(FileDedupeHash) bool
 	HasVerificationHash(FileVerificationHash) bool
 	StoreBinary(string, []byte)
-	NewSession() Session
 }
 
 const (
@@ -491,14 +482,16 @@ func (state ServerStateEnum) String() string {
 
 type ServerState struct {
 	server         ServerInterface
-	fileState      map[Session]map[FileId]*ServerFileState
+	name           string
+	fingerprint    Fingerprint
+	fileState      map[FileId]*ServerFileState
 	fileStateMutex sync.Mutex
 }
 
 func NewServerState(server ServerInterface) *ServerState {
 	ss := &ServerState{
 		server:    server,
-		fileState: make(map[Session]map[FileId]*ServerFileState),
+		fileState: make(map[FileId]*ServerFileState),
 	}
 
 	return ss
@@ -508,14 +501,14 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	if msg.Type == MessageRequestSession {
 		dataRequestSession := DataRequestSession{}
 		msg.Decode(&dataRequestSession)
-		session := ss.initSession()
-		ss.sendSession(dataRequestSession.Token, session)
+		ss.name = dataRequestSession.BackupName
+		if len(ss.name) == 0 {
+			return errors.New("Zero length backup name")
+		}
+		ss.fingerprint = dataRequestSession.Fingerprint
+		// TODO: Err on invalid fingerprint
+		ss.sendSession(dataRequestSession.Token)
 		return nil
-	}
-
-	// Everything below requires session
-	if !ss.isValidSession(msg.Session) {
-		return errors.New("Invalid session")
 	}
 
 	// If starting a file create the FileState to handle it
@@ -529,7 +522,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 		}
 
 		ss.fileStateMutex.Lock()
-		ss.fileState[msg.Session][sfs.id] = sfs
+		ss.fileState[sfs.id] = sfs
 		ss.fileStateMutex.Unlock()
 	}
 
@@ -542,23 +535,12 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	return errors.New(fmt.Sprintf("SS unhandled message: %v", msg))
 }
 
-func (ss *ServerState) initSession() Session {
-	session := ss.server.NewSession()
-	ss.fileState[session] = make(map[FileId]*ServerFileState)
-	return session
-}
-
-func (ss *ServerState) isValidSession(session Session) bool {
-	_, ok := ss.fileState[session]
-	return ok
-}
-
 func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
 	// Known valid session, not known valid id
 	idData := DataFileId{}
 	msg.Decode(&idData)
 	ss.fileStateMutex.Lock()
-	sfs, ok := ss.fileState[msg.Session][idData.Id]
+	sfs, ok := ss.fileState[idData.Id]
 	ss.fileStateMutex.Unlock()
 	if !ok {
 		return errors.New("Dispatching message to nonexistant id")
@@ -571,10 +553,9 @@ func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
 	return err
 }
 
-func (ss *ServerState) sendSession(token ClientToken, session Session) {
+func (ss *ServerState) sendSession(token ClientToken) {
 	ss.server.Send(NewMessage(MessageSession, &DataSession{
-		Token:   token,
-		Session: session,
+		Token: token,
 	}))
 }
 

@@ -20,18 +20,15 @@ func TestFileId(t *testing.T) {
 func TestMessageDataEncoding(t *testing.T) {
 	// TODO: Use test struct
 	testToken := ClientToken{1, 2, 3, 4, 5}
-	testSession := Session{1, 2, 3, 4, 5}
 	msgData := DataSession{
-		Token:   testToken,
-		Session: testSession,
+		Token: testToken,
 	}
 	msg := NewMessage(0, msgData)
 
 	deserializedData := DataSession{}
 	// TODO: Minimize allocations
 	msg.Decode(&deserializedData)
-	if deserializedData.Session != testSession ||
-		deserializedData.Token != testToken {
+	if deserializedData.Token != testToken {
 		t.Fatal("Deserialized data not equal")
 	}
 }
@@ -70,6 +67,14 @@ func (client *MockClient) Enumerate() <-chan string {
 		close(ch)
 	}()
 	return ch
+}
+
+func (client *MockClient) GetName() string {
+	return ""
+}
+
+func (client *MockClient) GetFingerprint() (Fingerprint, error) {
+	return Fingerprint{}, nil
 }
 
 // Test helper
@@ -161,7 +166,6 @@ func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
 
 type MockServer struct {
 	messages      []*Message
-	session       Session
 	files         []string
 	dedupeStore   map[FileDedupeHash]struct{}
 	fileInfoStore map[string]MockFileInfo
@@ -237,11 +241,6 @@ func (server *MockServer) StoreBinary(filename string, chunk []byte) {
 	server.storedFiles[filename] = append(server.storedFiles[filename], chunk...)
 }
 
-func (server *MockServer) NewSession() Session {
-	server.session = NewSession()
-	return server.session
-}
-
 // Test helper
 func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo, dedupe FileDedupeHash) {
 	server.files = append(server.files, filename)
@@ -250,10 +249,10 @@ func (server *MockServer) InitializeFile(filename string, fileInfo MockFileInfo,
 	server.storedFiles[filename] = []byte{}
 }
 
-func (ss *ServerState) InitializeFile(filename string, session Session, state ServerStateEnum) {
+func (ss *ServerState) InitializeFile(filename string, state ServerStateEnum) {
 	sfs := NewServerFileState(ss.server, filename)
 	sfs.state = state
-	ss.fileState[session][sfs.id] = sfs
+	ss.fileState[sfs.id] = sfs
 }
 
 // Test all side effects
@@ -289,36 +288,40 @@ func TestServerRespondsWithSession(t *testing.T) {
 	server := NewMockServer()
 	serverState := NewServerState(server)
 	clientToken := ClientToken{1, 2, 3, 4, 5}
+	name := "Backup Name"
+	fingerprint := Fingerprint{1, 2, 3, 4, 5}
 
 	serverState.handleMessage(NewMessage(MessageRequestSession, &DataRequestSession{
-		Token: clientToken,
+		Token:       clientToken,
+		BackupName:  name,
+		Fingerprint: fingerprint,
 	}))
 
 	server.assertSentMessages(t, []*Message{
 		NewMessage(MessageSession, &DataSession{
-			Token:   clientToken,
-			Session: server.session,
+			Token: clientToken,
 		}),
 	})
+
+	if serverState.name != name {
+		t.Fatal("serverState has invalid name")
+	}
+	if serverState.fingerprint != fingerprint {
+		t.Fatal("serverState did not capture fingerprint")
+	}
 }
 
 func TestClientDoesNotAcceptSessionWithIncorrectToken(t *testing.T) {
 	client := NewMockClient()
 	clientState := NewClientState(client)
 	clientState.state = ClientStateGettingSession
-	session := Session{1, 2, 3, 4, 5}
 	validToken := ClientToken{1, 2, 3, 4, 5}
 	invalidToken := ClientToken{5, 4, 3, 2, 1}
 	clientState.token = validToken
 
 	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
-		Session: session,
-		Token:   invalidToken,
+		Token: invalidToken,
 	}))
-
-	if clientState.session == session {
-		t.Fatal("Client accept session with invalid token")
-	}
 
 	if clientState.state != ClientStateGettingSession {
 		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateGettingSession)
@@ -329,18 +332,12 @@ func TestClientChecksFilesAfterGettingSession(t *testing.T) {
 	client := NewMockClient()
 	clientState := NewClientState(client)
 	clientState.state = ClientStateGettingSession
-	session := Session{1, 2, 3, 4, 5}
 	token := ClientToken{1, 2, 3, 4, 5}
 	clientState.token = token
 
 	clientState.handleMessage(NewMessage(MessageSession, &DataSession{
-		Session: session,
-		Token:   token,
+		Token: token,
 	}))
-
-	if clientState.session != session {
-		t.Fatal("Client state did not store session")
-	}
 
 	if clientState.state != ClientStateCheckingFiles {
 		t.Fatalf("Client in state %v, expected %v", clientState.state, ClientStateCheckingFiles)
@@ -391,9 +388,8 @@ func TestServerRequestsDedupeForMissingFile(t *testing.T) {
 
 	server := NewMockServer()
 	serverState := NewServerState(server)
-	session := serverState.initSession()
 
-	serverState.handleMessage(NewSessionMessage(session, MessageStartFile, &DataStartFile{
+	serverState.handleMessage(NewMessage(MessageStartFile, &DataStartFile{
 		Id:       fileId,
 		Filename: filename,
 		Modified: time.Time{},
@@ -413,9 +409,8 @@ func TestServerSendsOKWhenFileExists(t *testing.T) {
 	server := NewMockServer()
 	server.InitializeFile(filename, MockFileInfo{}, FileDedupeHash{})
 	serverState := NewServerState(server)
-	session := serverState.initSession()
 
-	serverState.handleMessage(NewSessionMessage(session, MessageStartFile, &DataStartFile{
+	serverState.handleMessage(NewMessage(MessageStartFile, &DataStartFile{
 		Id:       fileId,
 		Filename: filename,
 		Modified: time.Time{},
@@ -461,10 +456,9 @@ func TestServerRequestsBinaryWhenDedupeDifferent(t *testing.T) {
 	server := NewMockServer()
 	server.InitializeFile(filename, MockFileInfo{}, differentDedupe)
 	serverState := NewServerState(server)
-	session := serverState.initSession()
-	serverState.InitializeFile(filename, session, ServerStateCheckingDedupeHash)
+	serverState.InitializeFile(filename, ServerStateCheckingDedupeHash)
 
-	serverState.handleMessage(NewSessionMessage(session, MessageDedupeHash, &DataDedupeHash{
+	serverState.handleMessage(NewMessage(MessageDedupeHash, &DataDedupeHash{
 		Id:   fileId,
 		Hash: dedupe,
 	}))
@@ -485,10 +479,9 @@ func TestServerSendsOKWhenDedupeExists(t *testing.T) {
 	server := NewMockServer()
 	server.InitializeFile(filename, MockFileInfo{}, dedupe)
 	serverState := NewServerState(server)
-	session := serverState.initSession()
-	serverState.InitializeFile(filename, session, ServerStateCheckingDedupeHash)
+	serverState.InitializeFile(filename, ServerStateCheckingDedupeHash)
 
-	serverState.handleMessage(NewSessionMessage(session, MessageDedupeHash, &DataDedupeHash{
+	serverState.handleMessage(NewMessage(MessageDedupeHash, &DataDedupeHash{
 		Id:   fileId,
 		Hash: dedupe,
 	}))
@@ -557,10 +550,9 @@ func TestServerSavesDataWhenClientSendsIt(t *testing.T) {
 	server := NewMockServer()
 	server.InitializeFile(filename, MockFileInfo{}, FileDedupeHash{})
 	serverState := NewServerState(server)
-	session := serverState.initSession()
-	serverState.InitializeFile(filename, session, ServerStateGettingBinary)
+	serverState.InitializeFile(filename, ServerStateGettingBinary)
 
-	serverState.handleMessage(NewSessionMessage(session, MessageFileChunk, &DataFileChunk{
+	serverState.handleMessage(NewMessage(MessageFileChunk, &DataFileChunk{
 		Id:       fileId,
 		Filesize: 15,
 		Offset:   0,

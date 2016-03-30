@@ -75,10 +75,6 @@ func (server *Server) Send(msg *Message) {
 	server.network.send(msg)
 }
 
-func (server *Server) NewSession() Session {
-	return NewSession()
-}
-
 // Get session start request
 // Form backup location, get storage object
 

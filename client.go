@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/md5"
 	"github.com/kalafut/imohash"
 	"github.com/monochromegane/go-gitignore"
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,12 +16,15 @@ import (
 )
 
 type ClientConfig struct {
-	specFile string
+	spec string
+	root string
+	name string
 }
 
 type Client struct {
 	gitignore   gitignore.IgnoreMatcher
 	root        string
+	name        string
 	network     NetworkInterface
 	fileHandles map[string]*os.File
 }
@@ -27,12 +32,13 @@ type Client struct {
 // Verify Client implements ClientInterface
 var _ ClientInterface = (*Client)(nil)
 
-func NewClient(spec string, root string, network NetworkInterface) *Client {
-	ignorer := gitignore.NewGitIgnoreFromReader(root, strings.NewReader(spec))
+func NewClient(config ClientConfig, network NetworkInterface) *Client {
+	ignorer := gitignore.NewGitIgnoreFromReader(config.root, strings.NewReader(config.spec))
 
 	return &Client{
 		gitignore:   ignorer,
-		root:        root,
+		root:        config.root,
+		name:        config.name,
 		network:     network,
 		fileHandles: make(map[string]*os.File),
 	}
@@ -70,6 +76,7 @@ func (client *Client) GetDedupeHash(filename string) FileDedupeHash {
 }
 
 func (client *Client) GetFileChunk(filename string, size int64, offset int64) []byte {
+	// TODO: Use storage to abstract (+test)
 	_, ok := client.fileHandles[filename]
 	if !ok {
 		file, err := os.Open(filename)
@@ -84,7 +91,15 @@ func (client *Client) GetFileChunk(filename string, size int64, offset int64) []
 	data := make([]byte, size)
 	file.Seek(offset, os.SEEK_SET)
 	count, err := file.Read(data)
+	if err == io.EOF {
+		defer func() {
+			// TODO: test close is called
+			client.fileHandles[filename].Close()
+			delete(client.fileHandles, filename)
+		}()
+	}
 	if err != io.EOF && err != nil {
+		// TODO: error handling
 		log.Print(err)
 	}
 
@@ -117,6 +132,29 @@ func (client *Client) Enumerate() <-chan string {
 	return ch
 }
 
+func (client *Client) GetName() string {
+	return client.name
+}
+
+func (client *Client) GetFingerprint() (Fingerprint, error) {
+	hasher := md5.New()
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return Fingerprint{}, err
+	}
+
+	for _, interf := range interfaces {
+		if len(interf.HardwareAddr) > 0 {
+			hasher.Write(interf.HardwareAddr)
+		}
+	}
+
+	fingerprint := Fingerprint{}
+	copy(fingerprint[:], hasher.Sum(nil))
+	return fingerprint, nil
+}
+
 func PerformBackup(specFile string, network NetworkInterface) <-chan error {
 	errc := make(chan error)
 
@@ -128,7 +166,11 @@ func PerformBackup(specFile string, network NetworkInterface) <-chan error {
 
 	specBytes, err := ioutil.ReadAll(file)
 
-	client := NewClient(string(specBytes), path.Dir(specFile), network)
+	client := NewClient(ClientConfig{
+		spec: string(specBytes),
+		root: path.Dir(specFile),
+		name: path.Base(specFile),
+	}, network)
 
 	cs := NewClientState(client)
 
