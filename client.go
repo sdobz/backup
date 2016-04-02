@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/md5"
+	"encoding/hex"
 	"github.com/kalafut/imohash"
 	"github.com/monochromegane/go-gitignore"
 	"io"
@@ -145,7 +146,7 @@ func (client *Client) getIdentity() (string, error) {
 		}
 	}
 
-	return string(hasher.Sum(nil)), nil
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func (client *Client) getSession() string {

@@ -5,13 +5,14 @@ import (
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
 	"io"
-	"log"
 	"os"
 	"path"
+	"sync"
 )
 
 type Storage struct {
 	db   *sql.DB
+	dbm  sync.Mutex
 	base string
 }
 
@@ -53,7 +54,7 @@ type FileMeta struct {
 	FileName   string
 }
 
-func (m *FileMeta) Path() (string, error) {
+func (m *FileMeta) Path(base string) (string, error) {
 	if m.Identity == "" {
 		return "", errors.New("Identity is blank")
 	}
@@ -67,11 +68,11 @@ func (m *FileMeta) Path() (string, error) {
 		return "", errors.New("FileName is blank")
 	}
 
-	return path.Join(m.Identity, m.BackupName, m.Session, m.FileName), nil
+	return path.Join(base, m.Identity, m.BackupName, m.Session, m.FileName), nil
 }
 
-func (m *FileMeta) DataExists() (bool, error) {
-	path, err := m.Path()
+func (m *FileMeta) DataExists(base string) (bool, error) {
+	path, err := m.Path(base)
 	if err != nil {
 		return false, err
 	}
@@ -79,9 +80,9 @@ func (m *FileMeta) DataExists() (bool, error) {
 	return err == nil, err
 }
 
-func (m *FileMeta) Writer() (io.WriteCloser, error) {
+func (m *FileMeta) Writer(base string) (io.WriteCloser, error) {
 	// TODO: Permissions, modified
-	filePath, err := m.Path()
+	filePath, err := m.Path(base)
 	if err != nil {
 		return nil, err
 	}
@@ -106,21 +107,27 @@ func verifyDB(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if tableName != "files" {
+		if tableName != "meta" {
 			return errors.New("Table that isn't files found")
 		}
 	}
 
-	rows, err = db.Query("pragma table_info('files')")
-	// > .schema files
-	// CREATE TABLE files (path string, filename string, dedupe varchar(32), verif varchar(32), modified datetime);
-	defer rows.Close()
+	rows, err = db.Query("pragma table_info('meta')")
+	// > .schema meta
+	// CREATE TABLE meta (identity string, backup_name string, session string, filename string, dedupe varchar(32), verif varchar(32));
+	if rows != nil {
+		defer rows.Close()
+	}
+	if err != nil {
+		return err
+	}
 	expectedColumns := []string{
-		"path",     // Path to file relative to db
+		"identity", // Path to file relative to db
+		"backup_name",
+		"session",
 		"filename", // Original filename relative to backup config
 		"dedupe",   // imohash of file
 		"verif",    // full hash of file
-		"modified", // modification time of file
 	}
 	i := 0
 	var info pragmaInfo
@@ -150,12 +157,12 @@ func (s *Storage) LinkDedupe(dedupe FileDedupeHash, linkMeta *FileMeta) (bool, e
 	if sourceMeta == nil {
 		return false, nil
 	}
-	sourceFilename, err := sourceMeta.Path()
+	sourceFilename, err := sourceMeta.Path(s.base)
 	if err != nil {
 		return false, err
 	}
 
-	newFilename, err := linkMeta.Path()
+	newFilename, err := linkMeta.Path(s.base)
 	if err != nil {
 		return false, err
 	}
@@ -168,10 +175,14 @@ func (s *Storage) LinkDedupe(dedupe FileDedupeHash, linkMeta *FileMeta) (bool, e
 		return false, err
 	}
 
-	err = os.Link(sourceFilename, newFilename)
-	if err != nil {
+	if err = os.Link(sourceFilename, newFilename); err != nil {
 		return false, err
 	}
+
+	if err = s.writeMeta(linkMeta); err != nil {
+		return false, err
+	}
+
 	return true, nil
 }
 
@@ -183,12 +194,12 @@ func (s *Storage) LinkFromOtherSession(dest *FileMeta) (bool, error) {
 	if sourceMeta == nil {
 		return false, nil
 	}
-	sourceFilename, err := sourceMeta.Path()
+	sourceFilename, err := sourceMeta.Path(s.base)
 	if err != nil {
 		return false, err
 	}
 
-	newFilename, err := dest.Path()
+	newFilename, err := dest.Path(s.base)
 	if err != nil {
 		return false, err
 	}
@@ -201,15 +212,19 @@ func (s *Storage) LinkFromOtherSession(dest *FileMeta) (bool, error) {
 		return false, err
 	}
 
-	err = os.Link(sourceFilename, newFilename)
-	if err != nil {
+	if err = os.Link(sourceFilename, newFilename); err != nil {
 		return false, err
 	}
+
+	if err = s.writeMeta(dest); err != nil {
+		return false, err
+	}
+
 	return true, nil
 }
 
-func (s *Storage) WriteChunk(dest *FileMeta, chunk []byte) error {
-	w, err := dest.Writer()
+func (s *Storage) WriteChunk(dest *FileMeta, chunk []byte, last bool) error {
+	w, err := dest.Writer(s.base)
 	if w != nil {
 		defer w.Close()
 	}
@@ -220,15 +235,24 @@ func (s *Storage) WriteChunk(dest *FileMeta, chunk []byte) error {
 	if _, err = w.Write(chunk); err != nil {
 		return err
 	}
+
+	if last {
+		if err = s.writeMeta(dest); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (s *Storage) lookupFileMetaFromDedupe(dedupe FileDedupeHash) (*FileMeta, error) {
 	meta := &FileMeta{}
-	rows, err := s.db.Query("SELECT identity, backup_name, session, file_name FROM meta WHERE dedupe = '?'", dedupe)
-	defer rows.Close()
+	rows, err := s.db.Query("SELECT identity, backup_name, session, filename FROM meta WHERE dedupe = '?'", string(dedupe[:]))
+	if rows != nil {
+		defer rows.Close()
+	}
 	if err != nil {
-		log.Fatal("Query failed on lookupFileMetaFromDedupe")
+		return nil, err
 	}
 
 	for rows.Next() {
@@ -239,15 +263,17 @@ func (s *Storage) lookupFileMetaFromDedupe(dedupe FileDedupeHash) (*FileMeta, er
 		}
 		return meta, nil
 	}
-	return nil, errors.New("No results")
+	return nil, nil
 }
 
 func (s *Storage) lookupFileMetaFromOtherSession(search *FileMeta) (*FileMeta, error) {
 	meta := &FileMeta{}
-	rows, err := s.db.Query("SELECT identity, backup_name, session, file_name FROM meta WHERE identity = '?' AND backup_name = '?' AND file_name = '?'", search.Identity, search.BackupName, search.FileName)
-	defer rows.Close()
+	rows, err := s.db.Query("SELECT identity, backup_name, session, filename FROM meta WHERE identity = '?' AND backup_name = '?' AND filename = '?'", search.Identity, search.BackupName, search.FileName)
+	if rows != nil {
+		defer rows.Close()
+	}
 	if err != nil {
-		log.Fatal("Query failed on lookupFileMetaFromOtherSession")
+		return nil, err
 	}
 
 	for rows.Next() {
@@ -258,6 +284,21 @@ func (s *Storage) lookupFileMetaFromOtherSession(search *FileMeta) (*FileMeta, e
 		}
 		return meta, nil
 	}
-	return nil, errors.New("No results")
+	return nil, nil
+}
 
+func (s *Storage) writeMeta(meta *FileMeta) error {
+	s.dbm.Lock()
+	_, err := s.db.Exec(
+		"INSERT INTO meta (identity, backup_name, session, filename) VALUES (?, ?, ?, ?)",
+		meta.Identity,
+		meta.BackupName,
+		meta.Session,
+		meta.FileName,
+	)
+	s.dbm.Unlock()
+	if err != nil {
+		return err
+	}
+	return nil
 }

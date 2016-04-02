@@ -226,7 +226,7 @@ func (server *MockServer) LinkDedupe(filename string, hash FileDedupeHash) (bool
 	return ok, nil
 }
 
-func (server *MockServer) WriteChunk(filename string, chunk []byte) error {
+func (server *MockServer) WriteChunk(filename string, chunk []byte, last bool) error {
 	server.storedFiles[filename] = append(server.storedFiles[filename], chunk...)
 	return nil
 }

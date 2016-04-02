@@ -436,7 +436,7 @@ type ServerStateEnum int
 type ServerInterface interface {
 	Send(*Message)
 	GetVerification(string) FileVerificationHash
-	WriteChunk(string, []byte) error
+	WriteChunk(string, []byte, bool) error
 	LinkExisting(filename string) (bool, error)
 	LinkDedupe(filename string, hash FileDedupeHash) (bool, error)
 	SetClientInfo(ClientInfo)
@@ -620,7 +620,7 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			dataChunk := DataFileChunk{}
 			msg.Decode(&dataChunk)
 			// TODO: Guard against WriteChunk failures in message transmission
-			err := sfs.server.WriteChunk(sfs.filename, dataChunk.Chunk)
+			err := sfs.server.WriteChunk(sfs.filename, dataChunk.Chunk, dataChunk.Last())
 			if err != nil {
 				return err
 			}

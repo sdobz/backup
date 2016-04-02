@@ -56,13 +56,12 @@ func (server *Server) SetClientInfo(clientInfo ClientInfo) {
 	server.clientInfo = clientInfo
 }
 
-func (server *Server) WriteChunk(filename string, chunk []byte) error {
+func (server *Server) WriteChunk(filename string, chunk []byte, last bool) error {
 	log.Printf("Got %v bytes", len(chunk))
-	return server.storage.WriteChunk(server.metaForFilename(filename), chunk)
+	return server.storage.WriteChunk(server.metaForFilename(filename), chunk, last)
 }
 
 func (server *Server) LinkExisting(filename string) (bool, error) {
-	log.Printf("Storing existing")
 	return server.storage.LinkFromOtherSession(server.metaForFilename(filename))
 }
 
