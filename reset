@@ -1,0 +1,5 @@
+#!/bin/bash
+
+cd server_storage
+rm -r 4*
+sqlite3 meta.sqlite3 "DELETE FROM meta;"
