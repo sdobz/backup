@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 )
 
 type BackupServerConfig struct {
@@ -19,11 +18,10 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	config      ServerConfig
-	fingerprint Fingerprint
-	name        string
-	storage     *Storage
-	network     NetworkInterface
+	config     ServerConfig
+	clientInfo ClientInfo
+	storage    *Storage
+	network    NetworkInterface
 }
 
 var _ ServerInterface = (*Server)(nil)
@@ -41,40 +39,36 @@ func NewServer(config ServerConfig, network NetworkInterface) (server *Server, e
 	}, nil
 }
 
-func (server *Server) absolutePath(filename string) string {
-	return filepath.Join(server.config.FilePath, filename)
+func (server *Server) metaForFilename(filename string) *FileMeta {
+	return &FileMeta{
+		Identity:   server.clientInfo.Identity,
+		BackupName: server.clientInfo.BackupName,
+		Session:    server.clientInfo.Session,
+		FileName:   filename,
+	}
 }
 
-func (server *Server) HasFile(filename string) bool {
-	// TODO: compare modification time
-	_, err := os.Stat(server.absolutePath(filename))
-	return err == nil
+func (server *Server) GetVerification(filename string) FileVerificationHash {
+	return FileVerificationHash{}
 }
 
-func (server *Server) IsExpired(filename string) bool {
-	return false
+func (server *Server) SetClientInfo(clientInfo ClientInfo) {
+	server.clientInfo = clientInfo
 }
 
-func (server *Server) GetVerification(id FileId) FileVerificationHash {
-	return server.storage.GetVerification(id)
-}
-
-func (server *Server) HasDedupeHash(hash FileDedupeHash) bool {
-	return server.storage.HasDedupeHash(hash)
-}
-
-func (server *Server) HasVerificationHash(hash FileVerificationHash) bool {
-	return server.storage.HasVerificationHash(hash)
-}
-
-func (server *Server) SetSessionInfo(fingerprint Fingerprint, backupName string) {
-	server.fingerprint = fingerprint
-	server.name = backupName
-}
-
-func (server *Server) StoreBinary(filename string, chunk []byte) {
-	server.storage.StoreBinary(server.fingerprint, server.name, filename, chunk)
+func (server *Server) WriteChunk(filename string, chunk []byte) error {
 	log.Printf("Got %v bytes", len(chunk))
+	return server.storage.WriteChunk(server.metaForFilename(filename), chunk)
+}
+
+func (server *Server) LinkExisting(filename string) (bool, error) {
+	log.Printf("Storing existing")
+	return server.storage.LinkFromOtherSession(server.metaForFilename(filename))
+}
+
+func (server *Server) LinkDedupe(filename string, dedupe FileDedupeHash) (bool, error) {
+	log.Printf("Storing link")
+	return server.storage.LinkDedupe(dedupe, server.metaForFilename(filename))
 }
 
 func (server *Server) Send(msg *Message) {

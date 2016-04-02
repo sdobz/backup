@@ -73,8 +73,8 @@ func (client *MockClient) GetName() string {
 	return ""
 }
 
-func (client *MockClient) GetFingerprint() (Fingerprint, error) {
-	return Fingerprint{}, nil
+func (client *MockClient) GetClientInfo() (ClientInfo, error) {
+	return ClientInfo{}, nil
 }
 
 // Test helper
@@ -167,8 +167,7 @@ func (cs *ClientState) InitializeFile(filename string, state ClientStateEnum) {
 type MockServer struct {
 	messages      []*Message
 	files         []string
-	name          string
-	fingerprint   Fingerprint
+	clientInfo    ClientInfo
 	dedupeStore   map[FileDedupeHash]struct{}
 	fileInfoStore map[string]MockFileInfo
 	storedFiles   map[string][]byte
@@ -213,39 +212,27 @@ func (server *MockServer) assertSentMessages(t *testing.T, msgs []*Message) {
 	}
 }
 
-func (server *MockServer) HasFile(filename string) bool {
-	for _, a := range server.files {
-		if a == filename {
-			return true
-		}
-	}
-	return false
-}
-
-func (server *MockServer) IsExpired(string) bool {
-	return false
-}
-
-func (server *MockServer) GetVerification(FileId) FileVerificationHash {
+func (server *MockServer) GetVerification(filename string) FileVerificationHash {
 	return FileVerificationHash{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 }
 
-func (server *MockServer) HasDedupeHash(hash FileDedupeHash) bool {
+func (server *MockServer) LinkExisting(filename string) (bool, error) {
+	_, ok := server.fileInfoStore[filename]
+	return ok, nil
+}
+
+func (server *MockServer) LinkDedupe(filename string, hash FileDedupeHash) (bool, error) {
 	_, ok := server.dedupeStore[hash]
-	return ok
+	return ok, nil
 }
 
-func (server *MockServer) HasVerificationHash(FileVerificationHash) bool {
-	return false
-}
-
-func (server *MockServer) StoreBinary(filename string, chunk []byte) {
+func (server *MockServer) WriteChunk(filename string, chunk []byte) error {
 	server.storedFiles[filename] = append(server.storedFiles[filename], chunk...)
+	return nil
 }
 
-func (server *MockServer) SetSessionInfo(fingerprint Fingerprint, backupName string) {
-	server.fingerprint = fingerprint
-	server.name = backupName
+func (server *MockServer) SetClientInfo(clientInfo ClientInfo) {
+	server.clientInfo = clientInfo
 }
 
 // Test helper
@@ -295,13 +282,15 @@ func TestServerRespondsWithSession(t *testing.T) {
 	server := NewMockServer()
 	serverState := NewServerState(server)
 	clientToken := ClientToken{1, 2, 3, 4, 5}
-	name := "Backup Name"
-	fingerprint := Fingerprint{1, 2, 3, 4, 5}
+	clientInfo := ClientInfo{
+		Identity:   "identity",
+		BackupName: "name",
+		Session:    "session",
+	}
 
 	serverState.handleMessage(NewMessage(MessageRequestSession, &DataRequestSession{
-		Token:       clientToken,
-		BackupName:  name,
-		Fingerprint: fingerprint,
+		Token:      clientToken,
+		ClientInfo: clientInfo,
 	}))
 
 	server.assertSentMessages(t, []*Message{
@@ -310,11 +299,8 @@ func TestServerRespondsWithSession(t *testing.T) {
 		}),
 	})
 
-	if server.name != name {
-		t.Fatal("server did not capture name")
-	}
-	if server.fingerprint != fingerprint {
-		t.Fatal("server did not capture fingerprint")
+	if server.clientInfo != clientInfo {
+		t.Fatal("Server failed to store ClientInfo")
 	}
 }
 

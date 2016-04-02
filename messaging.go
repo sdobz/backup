@@ -30,10 +30,6 @@ const VerificationHashSize = 32
 
 type FileVerificationHash [VerificationHashSize]byte
 
-const FingerprintSize = 32
-
-type Fingerprint [FingerprintSize]byte
-
 // Message information
 type MessageType int
 
@@ -111,9 +107,8 @@ func (msg *Message) Decode(data interface{}) error {
 }
 
 type DataRequestSession struct {
-	Token       ClientToken
-	BackupName  string
-	Fingerprint Fingerprint
+	Token      ClientToken
+	ClientInfo ClientInfo
 }
 
 type DataSession struct {
@@ -160,7 +155,9 @@ type DataFileChunk struct {
 	Chunk    []byte
 }
 
-const ChunkSize = 1
+func (c *DataFileChunk) Last() bool {
+	return c.Filesize == c.Offset+int64(len(c.Chunk))
+}
 
 // Client state
 type ClientStateEnum int
@@ -212,7 +209,6 @@ func NewClientToken() ClientToken {
 	b := [ClientTokenSize]byte{}
 	copy(b[:], NewRandomBytes(ClientTokenSize))
 	return ClientToken(b)
-
 }
 
 type ClientInterface interface {
@@ -221,8 +217,13 @@ type ClientInterface interface {
 	GetDedupeHash(string) FileDedupeHash
 	GetFileChunk(filename string, size int64, offset int64) []byte
 	Enumerate() <-chan string
-	GetName() string
-	GetFingerprint() (Fingerprint, error)
+	GetClientInfo() (ClientInfo, error)
+}
+
+type ClientInfo struct {
+	Identity   string
+	BackupName string
+	Session    string
 }
 
 const ClientTokenSize = 32
@@ -293,30 +294,19 @@ func (cs *ClientState) handleFileMessage(msg *Message) error {
 	cs.fileStateMutex.Unlock()
 
 	if ok {
-		preState := cfs.state
-		err := cfs.handleMessage(msg)
-		if err != nil {
-			return err
-		}
-
-		if preState != cfs.state {
-			log.Printf("%v transitioned from %v", cfs, preState)
-		}
-
-		return nil
+		return cfs.handleMessage(msg)
 	}
 	return errors.New("FileId not found")
 }
 
 func (cs *ClientState) sendRequestSession() error {
-	fingerprint, err := cs.client.GetFingerprint()
+	clientInfo, err := cs.client.GetClientInfo()
 	if err != nil {
 		return err
 	}
 	cs.client.Send(NewMessage(MessageRequestSession, &DataRequestSession{
-		Token:       cs.token,
-		BackupName:  cs.client.GetName(),
-		Fingerprint: fingerprint,
+		Token:      cs.token,
+		ClientInfo: clientInfo,
 	}))
 	return nil
 }
@@ -445,13 +435,11 @@ type ServerStateEnum int
 
 type ServerInterface interface {
 	Send(*Message)
-	HasFile(string) bool
-	IsExpired(string) bool
-	GetVerification(FileId) FileVerificationHash
-	HasDedupeHash(FileDedupeHash) bool
-	HasVerificationHash(FileVerificationHash) bool
-	StoreBinary(string, []byte)
-	SetSessionInfo(Fingerprint, string)
+	GetVerification(string) FileVerificationHash
+	WriteChunk(string, []byte) error
+	LinkExisting(filename string) (bool, error)
+	LinkDedupe(filename string, hash FileDedupeHash) (bool, error)
+	SetClientInfo(ClientInfo)
 }
 
 const (
@@ -459,8 +447,7 @@ const (
 	ServerStateCheckingDedupeHash                              // Awaiting file hash from client
 	ServerStateCheckingVerificationHash                        // Awaiting file hash from client
 	ServerStateGettingBinary                                   // Awaiting binary from client
-	ServerStateEndLink                                         // Link file to existing file
-	ServerStateEndBinary                                       // Write new binary data
+	ServerStateDone                                            // Link file to existing file
 )
 
 func (state ServerStateEnum) String() string {
@@ -473,10 +460,8 @@ func (state ServerStateEnum) String() string {
 		return "Checking Verif Hash"
 	case ServerStateGettingBinary:
 		return "Getting Binary"
-	case ServerStateEndLink:
-		return "Finished Link"
-	case ServerStateEndBinary:
-		return "Finished Binary"
+	case ServerStateDone:
+		return "Done"
 	}
 	return "Unknown"
 }
@@ -500,7 +485,7 @@ func (ss *ServerState) handleMessage(msg *Message) error {
 	if msg.Type == MessageRequestSession {
 		dataRequestSession := DataRequestSession{}
 		msg.Decode(&dataRequestSession)
-		ss.server.SetSessionInfo(dataRequestSession.Fingerprint, dataRequestSession.BackupName)
+		ss.server.SetClientInfo(dataRequestSession.ClientInfo)
 		// TODO: Err on invalid fingerprint
 		ss.sendSession(dataRequestSession.Token)
 		return nil
@@ -540,11 +525,7 @@ func (ss *ServerState) dispatchMessageToFileState(msg *Message) error {
 	if !ok {
 		return errors.New("Dispatching message to nonexistant id")
 	}
-	preState := sfs.state
 	err := sfs.handleMessage(msg)
-	if sfs.state != preState {
-		log.Printf("%v transitioned from %v", sfs, preState)
-	}
 	return err
 }
 
@@ -555,14 +536,13 @@ func (ss *ServerState) sendSession(token ClientToken) {
 }
 
 type ServerFileState struct {
-	server     ServerInterface
-	id         FileId
-	state      ServerStateEnum
-	filename   string
-	dedupeHash FileDedupeHash
-	filesize   int64
-	offset     int64
-	network    NetworkInterface
+	server   ServerInterface
+	id       FileId
+	state    ServerStateEnum
+	filename string
+	filesize int64
+	offset   int64
+	network  NetworkInterface
 }
 
 func (sfs ServerFileState) String() string {
@@ -590,18 +570,18 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			if err := msg.Decode(&fileData); err != nil {
 				return err
 			}
-			if !sfs.server.HasFile(fileData.Filename) {
-				// TODO: return error from inside message to here
+
+			existsInOtherSession, err := sfs.server.LinkExisting(fileData.Filename)
+			if err != nil {
+				return err
+			}
+			if existsInOtherSession {
+				sfs.state = ServerStateDone
+				sfs.sendFileOK()
+			} else {
 				sfs.state = ServerStateCheckingDedupeHash
 				sfs.sendFileMissing()
-			} else if sfs.server.IsExpired(fileData.Filename) {
-				sfs.state = ServerStateCheckingVerificationHash
-				sfs.sendFileVerification()
-			} else {
-				sfs.state = ServerStateEndLink
-				sfs.sendFileOK()
 			}
-			return nil
 		}
 	} else if sfs.state == ServerStateCheckingDedupeHash {
 		if msg.Type == MessageDedupeHash {
@@ -609,8 +589,12 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			if err := msg.Decode(&dedupeData); err != nil {
 				return err
 			}
-			if sfs.server.HasDedupeHash(dedupeData.Hash) {
-				sfs.state = ServerStateEndLink
+			hasDedupe, err := sfs.server.LinkDedupe(sfs.filename, dedupeData.Hash)
+			if err != nil {
+				return err
+			}
+			if hasDedupe {
+				sfs.state = ServerStateDone
 				sfs.sendFileOK()
 			} else {
 				sfs.state = ServerStateGettingBinary
@@ -624,24 +608,29 @@ func (sfs *ServerFileState) handleMessage(msg *Message) error {
 			if err := msg.Decode(&verificationData); err != nil {
 				return err
 			}
-			if sfs.server.HasVerificationHash(verificationData.Hash) {
-				sfs.state = ServerStateEndLink
-				sfs.sendFileOK()
-			} else {
+			if sfs.server.GetVerification(sfs.filename) != verificationData.Hash {
 				sfs.state = ServerStateGettingBinary
 				sfs.sendRequestBinary()
 			}
+			// TODO: sendFileOK after verification OK
 			return nil
 		}
 	} else if sfs.state == ServerStateGettingBinary {
 		if msg.Type == MessageFileChunk {
 			dataChunk := DataFileChunk{}
 			msg.Decode(&dataChunk)
-			sfs.server.StoreBinary(sfs.filename, dataChunk.Chunk)
-			if dataChunk.Filesize == dataChunk.Offset+int64(len(dataChunk.Chunk)) {
-				sfs.state = ServerStateEndBinary
+			// TODO: Guard against WriteChunk failures in message transmission
+			err := sfs.server.WriteChunk(sfs.filename, dataChunk.Chunk)
+			if err != nil {
+				return err
+			}
+			if dataChunk.Last() {
+				sfs.state = ServerStateDone
+				// TODO: Verify file after receipt
+				// TODO: Write meta
 				sfs.sendFileOK()
 			} else {
+				sfs.state = ServerStateGettingBinary
 				sfs.sendRequestBinary()
 			}
 			return nil
@@ -659,7 +648,7 @@ func (sfs *ServerFileState) sendFileOK() {
 func (sfs *ServerFileState) sendFileVerification() {
 	sfs.server.Send(NewMessage(MessageFileVerification, &DataFileVerification{
 		Id:   sfs.id,
-		Hash: sfs.server.GetVerification(sfs.id),
+		Hash: sfs.server.GetVerification(sfs.filename),
 	}))
 }
 

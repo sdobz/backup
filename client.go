@@ -117,16 +117,26 @@ func (client *Client) Enumerate() <-chan string {
 	return ch
 }
 
-func (client *Client) GetName() string {
-	return client.name
+func (client *Client) GetClientInfo() (ClientInfo, error) {
+	identity, err := client.getIdentity()
+	if err != nil {
+		return ClientInfo{}, nil
+	}
+
+	return ClientInfo{
+		Identity:   identity,
+		BackupName: client.name,
+		Session:    client.getSession(),
+	}, nil
 }
 
-func (client *Client) GetFingerprint() (Fingerprint, error) {
+func (client *Client) getIdentity() (string, error) {
+	// TODO: Base on private key
 	hasher := md5.New()
 
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return Fingerprint{}, err
+		return "", err
 	}
 
 	for _, interf := range interfaces {
@@ -135,9 +145,11 @@ func (client *Client) GetFingerprint() (Fingerprint, error) {
 		}
 	}
 
-	fingerprint := Fingerprint{}
-	copy(fingerprint[:], hasher.Sum(nil))
-	return fingerprint, nil
+	return string(hasher.Sum(nil)), nil
+}
+
+func (client *Client) getSession() string {
+	return time.Now().Format("2006-01-02")
 }
 
 func PerformBackup(specFile string, network NetworkInterface) <-chan error {
