@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"github.com/kalafut/imohash"
-	"github.com/monochromegane/go-gitignore"
 	"io"
 	"io/ioutil"
 	"log"
@@ -23,7 +22,7 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	gitignore   gitignore.IgnoreMatcher
+	gitignore   *GitIgnore
 	root        string
 	name        string
 	network     NetworkInterface
@@ -33,8 +32,11 @@ type Client struct {
 // Verify Client implements ClientInterface
 var _ ClientInterface = (*Client)(nil)
 
-func NewClient(config ClientConfig, network NetworkInterface) *Client {
-	ignorer := gitignore.NewGitIgnoreFromReader(config.root, strings.NewReader(config.spec))
+func NewClient(config ClientConfig, network NetworkInterface) (*Client, error) {
+	ignorer, err := NewGitIgnore(config.root, strings.NewReader(config.spec))
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		gitignore:   ignorer,
@@ -42,7 +44,7 @@ func NewClient(config ClientConfig, network NetworkInterface) *Client {
 		name:        config.name,
 		network:     network,
 		fileHandles: make(map[string]*os.File),
-	}
+	}, nil
 }
 
 func (client *Client) Send(msg *Message) {
@@ -160,15 +162,21 @@ func PerformBackup(specFile string, network NetworkInterface) <-chan error {
 	if err != nil {
 		errc <- err
 		defer close(errc)
+		return errc
 	}
 
 	specBytes, err := ioutil.ReadAll(file)
 
-	client := NewClient(ClientConfig{
+	client, err := NewClient(ClientConfig{
 		spec: string(specBytes),
 		root: path.Dir(specFile),
 		name: path.Base(specFile),
 	}, network)
+	if err != nil {
+		errc <- err
+		defer close(errc)
+		return errc
+	}
 
 	cs := NewClientState(client)
 
@@ -176,6 +184,7 @@ func PerformBackup(specFile string, network NetworkInterface) <-chan error {
 	if err != nil {
 		errc <- err
 		defer close(errc)
+		return errc
 	}
 
 	go func() {

@@ -1,2 +1,2 @@
-server_storage/*
-.git/*
+server_storage
+.git
