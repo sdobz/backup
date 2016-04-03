@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"github.com/sdobz/backup/gitignore"
 )
 
 type ClientConfig struct {
@@ -22,7 +23,7 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	gitignore   *GitIgnore
+	gitignore   *gitignore.GitIgnore
 	root        string
 	name        string
 	network     NetworkInterface
@@ -33,7 +34,7 @@ type Client struct {
 var _ ClientInterface = (*Client)(nil)
 
 func NewClient(config ClientConfig, network NetworkInterface) (*Client, error) {
-	ignorer, err := NewGitIgnore(config.root, strings.NewReader(config.spec))
+	ignorer, err := gitignore.NewGitIgnore(config.root, strings.NewReader(config.spec))
 	if err != nil {
 		return nil, err
 	}
