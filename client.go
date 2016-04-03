@@ -100,17 +100,19 @@ func (client *Client) Enumerate() <-chan string {
 	log.Print("Enumerate...")
 	go func() {
 		// For every glob
-		log.Print("In Enumerate gofunc, walking %v", client.root)
+		log.Printf("In Enumerate gofunc, walking %v", client.root)
 		filepath.Walk(client.root, filepath.WalkFunc(func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
+			isDir := info.IsDir()
+			match := client.gitignore.Match(path, isDir)
 
-			if info.IsDir() {
-				return nil
+			if match && isDir {
+				return filepath.SkipDir
 			}
 
-			if !client.gitignore.Match(path, false) {
+			if !match && !isDir {
 				log.Printf("Path not ignored: %v", path)
 				ch <- path
 			}
