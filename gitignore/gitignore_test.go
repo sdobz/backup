@@ -92,8 +92,7 @@ git-sample-3/foo/*
 		singleMatch{"git-sample-3/foo/test", true, true},
 		singleMatch{"git-sample-3/test", true, true},
 		singleMatch{"htmldoc", true, false},
-		// Has no support for subdir/*.sadf
-		// singleMatch{"htmldoc/docs.html", false, false},
+		singleMatch{"htmldoc/docs.html", false, false},
 		singleMatch{"htmldoc/jslib.min.js", false, true},
 		singleMatch{"lib.a", false, true},
 		singleMatch{"log", true, false},
