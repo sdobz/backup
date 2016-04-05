@@ -101,7 +101,7 @@ func NewGitIgnore(base string, reader io.Reader) (*GitIgnore, error) {
 }
 
 func (gi *GitIgnore) Match(path string, isDir bool) bool {
-	for i := len(gi.patterns) - 1; i > 0; i-- {
+	for i := len(gi.patterns) - 1; i >= 0; i-- {
 		gp := gi.patterns[i]
 		if gp.Match(path, isDir) {
 			return !gp.Inverted()
