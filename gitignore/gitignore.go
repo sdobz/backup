@@ -6,6 +6,8 @@ import (
 	"github.com/gobwas/glob"
 	"io"
 	"os"
+	"path"
+	"strings"
 )
 
 type GitIgnore struct {
@@ -22,6 +24,7 @@ type globPattern struct {
 	dirOnly bool
 	orig    string
 	glob    glob.Glob
+	depth   int
 }
 
 func (gp *globPattern) String() string {
@@ -32,11 +35,21 @@ func (gp *globPattern) Inverted() bool {
 	return gp.invert
 }
 
-func (gp *globPattern) Match(path string, isDir bool) bool {
+func (gp *globPattern) Match(matchPath string, isDir bool) bool {
 	if gp.dirOnly && !isDir {
 		return false
 	}
-	return gp.glob.Match(path)
+
+	if gp.depth == 0 {
+		matchPath = path.Base(matchPath)
+	} else {
+		pathDepth := strings.Count(matchPath, "/")
+		if pathDepth < gp.depth {
+			return false
+		}
+	}
+
+	return gp.glob.Match(matchPath)
 }
 
 func trimTrailingSpace(in []byte) []byte {
@@ -73,6 +86,12 @@ func NewGitIgnore(base string, reader io.Reader) (*GitIgnore, error) {
 			// Strip trailing slash
 			line = line[0 : len(line)-1]
 			gp.dirOnly = true
+		}
+
+		for i := 0; i < len(line); i++ {
+			if line[i] == '/' {
+				gp.depth += 1
+			}
 		}
 
 		gp.glob = glob.MustCompile(string(line), os.PathSeparator)
