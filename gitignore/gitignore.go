@@ -20,14 +20,14 @@ type pattern interface {
 }
 
 type globPattern struct {
-	invert  bool
-	dirOnly bool
+	invert       bool
+	dirOnly      bool
 	leadingSlash bool
-	orig    string
-	glob    glob.Glob
-	globSuffix bool
-	globPrefix bool
-	depth   int
+	orig         string
+	glob         glob.Glob
+	globSuffix   bool
+	globPrefix   bool
+	depth        int
 }
 
 func (gp *globPattern) String() string {
@@ -55,7 +55,6 @@ func (gp *globPattern) Match(matchPath string, isDir bool) bool {
 			matchPath = "/" + matchPath
 		}
 	}
-
 
 	if gp.depth == 0 {
 		matchPath = path.Base(matchPath)

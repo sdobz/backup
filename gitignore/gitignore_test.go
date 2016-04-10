@@ -15,6 +15,8 @@ type singleMatch struct {
 func TestMatch(t *testing.T) {
 	// Implementing tests from this guy:
 	// https://github.com/svent/gitignore-test
+	// In Pubic Domain, via tweet 2016-4-3
+	// @sven_t: Feel free to keep the test cases, I would consider the test repo public domain anyway.
 
 	gi, _ := NewGitIgnore(".", strings.NewReader(`
 *.[oa]
@@ -138,4 +140,76 @@ func matchTree(gi *GitIgnore, match singleMatch) bool {
 		isDir = true
 	}
 	return false
+}
+
+type assert struct {
+	patterns []string
+	file     file
+	expect   bool
+}
+
+type file struct {
+	path  string
+	isDir bool
+}
+
+func TestMatch2(t *testing.T) {
+	/*
+		// Source: github.com/monochromegane/go-gitignore/gitignore_test.go
+		The MIT License (MIT)
+
+		Copyright (c) [2015] [go-gitignore]
+		Modified to use backup gitignore Vincent Khougaz [2016]
+
+		Permission is hereby granted, free of charge, to any person obtaining a copy
+		of this software and associated documentation files (the "Software"), to deal
+		in the Software without restriction, including without limitation the rights
+		to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+		copies of the Software, and to permit persons to whom the Software is
+		furnished to do so, subject to the following conditions:
+
+		The above copyright notice and this permission notice shall be included in all
+		copies or substantial portions of the Software.
+
+		THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+		IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+		FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+		AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+		LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+		OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+		SOFTWARE.
+	*/
+	asserts := []assert{
+		assert{[]string{"a.txt"}, file{"a.txt", false}, true},
+		assert{[]string{"*.txt"}, file{"a.txt", false}, true},
+		assert{[]string{"dir/a.txt"}, file{"dir/a.txt", false}, true},
+		assert{[]string{"dir/*.txt"}, file{"dir/a.txt", false}, true},
+		assert{[]string{"**/dir2/a.txt"}, file{"dir1/dir2/a.txt", false}, true},
+		assert{[]string{"**/dir3/a.txt"}, file{"dir1/dir2/dir3/a.txt", false}, true},
+		assert{[]string{"a.txt"}, file{"dir/a.txt", false}, true},
+		assert{[]string{"*.txt"}, file{"dir/a.txt", false}, true},
+		assert{[]string{"a.txt"}, file{"dir1/dir2/a.txt", false}, true},
+		// Duplicate
+		//assert{[]string{"dir2/a.txt"}, file{"dir1/dir2/a.txt", false}, true},
+		assert{[]string{"dir"}, file{"dir", true}, true},
+		assert{[]string{"dir/"}, file{"dir", true}, true},
+		assert{[]string{"dir/"}, file{"dir", false}, false},
+		assert{[]string{"dir1/dir2/"}, file{"dir1/dir2", true}, true},
+		assert{[]string{"/a.txt"}, file{"a.txt", false}, true},
+		assert{[]string{"/dir/a.txt"}, file{"dir/a.txt", false}, true},
+		assert{[]string{"/dir1/a.txt"}, file{"dir/dir1/a.txt", false}, false},
+		assert{[]string{"/a.txt"}, file{"dir/a.txt", false}, false},
+		assert{[]string{"a.txt", "b.txt"}, file{"dir/b.txt", false}, true},
+		assert{[]string{"*.txt", "!b.txt"}, file{"dir/b.txt", false}, false},
+		assert{[]string{"dir/*.txt", "!dir/b.txt"}, file{"dir/b.txt", false}, false},
+		assert{[]string{"dir/*.txt", "!/b.txt"}, file{"dir/b.txt", false}, true},
+	}
+
+	for _, assert := range asserts {
+		gi, _ := NewGitIgnore(".", strings.NewReader(strings.Join(assert.patterns, "\n")))
+		result := gi.Match(assert.file.path, assert.file.isDir)
+		if result != assert.expect {
+			t.Errorf("Match should return %t, got %t on %v", assert.expect, result, assert)
+		}
+	}
 }
