@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"log"
 )
 
 type GitIgnore struct {
@@ -24,6 +25,8 @@ type globPattern struct {
 	dirOnly bool
 	orig    string
 	glob    glob.Glob
+	globSuffix bool
+	globPrefix bool
 	depth   int
 }
 
@@ -39,6 +42,16 @@ func (gp *globPattern) Match(matchPath string, isDir bool) bool {
 	if gp.dirOnly && !isDir {
 		return false
 	}
+
+	if isDir {
+		if gp.globSuffix {
+			matchPath = matchPath + "/"
+		}
+		if gp.globPrefix {
+			matchPath = "/" + matchPath
+		}
+	}
+
 
 	if gp.depth == 0 {
 		matchPath = path.Base(matchPath)
@@ -60,6 +73,10 @@ func trimTrailingSpace(in []byte) []byte {
 func NewGitIgnore(base string, reader io.Reader) (*GitIgnore, error) {
 	scn := bufio.NewScanner(reader)
 	gi := &GitIgnore{}
+
+	globPrefix := []byte{'*', '*', '/'}
+	globSuffix := []byte{'/', '*', '*'}
+
 	for scn.Scan() {
 		line := scn.Bytes()
 		line = trimTrailingSpace(line)
@@ -94,6 +111,13 @@ func NewGitIgnore(base string, reader io.Reader) (*GitIgnore, error) {
 			}
 		}
 
+		if bytes.HasSuffix(line, globSuffix) {
+			gp.globSuffix = true
+		}
+		if bytes.HasPrefix(line, globPrefix) {
+			gp.globPrefix = true
+		}
+
 		gp.glob = glob.MustCompile(string(line), os.PathSeparator)
 		gi.patterns = append(gi.patterns, gp)
 	}
@@ -104,6 +128,7 @@ func (gi *GitIgnore) Match(path string, isDir bool) bool {
 	for i := len(gi.patterns) - 1; i >= 0; i-- {
 		gp := gi.patterns[i]
 		if gp.Match(path, isDir) {
+			log.Printf("%v matches %v, returning: %v", gp, path, !gp.Inverted())
 			return !gp.Inverted()
 		}
 	}

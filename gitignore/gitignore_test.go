@@ -50,8 +50,8 @@ README.md
 # arch/foo/kernel/.gitignore
 !arch/foo/kernel/vmlinux*
 
-# htmldocs/.gitignore
-!htmldocs/*.html
+# htmldoc/.gitignore
+!htmldoc/*.html
 
 # git-sample-3/.gitignore
 git-sample-3/*
