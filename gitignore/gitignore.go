@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"log"
 )
 
 type GitIgnore struct {
@@ -23,6 +22,7 @@ type pattern interface {
 type globPattern struct {
 	invert  bool
 	dirOnly bool
+	leadingSlash bool
 	orig    string
 	glob    glob.Glob
 	globSuffix bool
@@ -43,11 +43,15 @@ func (gp *globPattern) Match(matchPath string, isDir bool) bool {
 		return false
 	}
 
+	if gp.leadingSlash {
+		matchPath = "/" + matchPath
+	}
+
 	if isDir {
 		if gp.globSuffix {
 			matchPath = matchPath + "/"
 		}
-		if gp.globPrefix {
+		if gp.globPrefix && !gp.leadingSlash {
 			matchPath = "/" + matchPath
 		}
 	}
@@ -99,6 +103,10 @@ func NewGitIgnore(base string, reader io.Reader) (*GitIgnore, error) {
 			gp.invert = true
 		}
 
+		if line[0] == '/' {
+			gp.leadingSlash = true
+		}
+
 		if line[len(line)-1] == '/' {
 			// Strip trailing slash
 			line = line[0 : len(line)-1]
@@ -128,7 +136,6 @@ func (gi *GitIgnore) Match(path string, isDir bool) bool {
 	for i := len(gi.patterns) - 1; i >= 0; i-- {
 		gp := gi.patterns[i]
 		if gp.Match(path, isDir) {
-			log.Printf("%v matches %v, returning: %v", gp, path, !gp.Inverted())
 			return !gp.Inverted()
 		}
 	}
